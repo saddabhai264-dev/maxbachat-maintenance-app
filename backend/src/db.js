@@ -9,7 +9,7 @@ const pool = new Pool({
   // DigitalOcean managed databases require SSL. sslmode=require in the connection
   // string handles this, but some Node/OpenSSL combinations also need this explicit
   // flag because DO's certificate isn't in the default trust store.
-  ssl: { rejectUnauthorized: false }
+  ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false }
 });
 
 module.exports = pool;
