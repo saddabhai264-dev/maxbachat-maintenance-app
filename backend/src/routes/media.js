@@ -1,0 +1,46 @@
+const express = require('express');
+const crypto = require('crypto');
+const { requireAuth, requirePasswordReady } = require('../auth');
+const { presignPutUrl, publicUrlFor } = require('../spaces');
+
+const router = express.Router();
+router.use(requireAuth);
+router.use(requirePasswordReady);
+
+// POST /api/media/presign  { filename, contentType, size }
+// Returns a short-lived URL the browser can PUT the file to directly.
+router.post('/presign', async (req, res) => {
+  if (!['captain', 'reporter', 'coordinator'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
+  const { filename, contentType, size } = req.body || {};
+  if (!filename || !contentType || !Number.isFinite(Number(size))) {
+    return res.status(400).json({ error: 'filename, contentType and size required' });
+  }
+  if (!contentType.startsWith('image/') && !contentType.startsWith('video/')) {
+    return res.status(400).json({ error: 'Only image or video files are allowed' });
+  }
+  const maxBytes = contentType.startsWith('video/') ? 60 * 1024 * 1024 : 15 * 1024 * 1024;
+  if (Number(size) <= 0 || Number(size) > maxBytes) {
+    return res.status(400).json({ error: `File is too large. Max ${contentType.startsWith('video/') ? '60MB for video' : '15MB for photos'}.` });
+  }
+
+  const ext = (filename.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const key = `issues/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
+
+  try {
+    const uploadUrl = await presignPutUrl(key, contentType);
+    res.json({
+      uploadUrl,
+      key,
+      publicUrl: publicUrlFor(key),
+      acl: process.env.MEDIA_PUBLIC_READ === 'true' ? 'public-read' : null,
+      type: contentType.startsWith('video/') ? 'video' : 'image'
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not prepare upload' });
+  }
+});
+
+module.exports = router;

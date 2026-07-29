@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: maxbachat-maintenance
+    env: node
+    plan: free
+    buildCommand: cd backend && npm install && npm run migrate && npm run seed
+    startCommand: cd backend && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MEDIA_PUBLIC_READ
+        value: "false"
+      - key: CEO_APPROVAL_THRESHOLD
+        value: "300000"
+      - key: NOTIFICATION_WEBHOOK_URL
+        value: ""
+      - key: NOTIFICATION_PROVIDER
+        value: ""
+      - key: GREEN_API_INSTANCE_ID
+        value: ""
+      - key: GREEN_API_TOKEN
+        value: ""
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: JWT_SECRET
+        generateValue: true

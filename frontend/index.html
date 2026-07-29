@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ur-PK">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MAXBACHAT | Maintenance Performance Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Roboto+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --red:#D6231C;
+    --red-dark:#A8180F;
+    --red-tint:#FDECEB;
+    --ink:#1C1B1A;
+    --ink-soft:#57544F;
+    --paper:#FAFAF8;
+    --card:#FFFFFF;
+    --line:#E7E4DD;
+    --amber:#D98C0A;
+    --amber-tint:#FCF1DD;
+    --green:#1E8A4C;
+    --green-tint:#E7F5EC;
+    --blue:#2563AA;
+    --blue-tint:#E9F1FB;
+    --shadow:0 1px 2px rgba(28,27,26,.06);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;}
+  h1,h2,h3,.display{font-family:'Poppins',sans-serif;}
+  button{font-family:inherit;cursor:pointer;}
+  input,select,textarea{font-family:inherit;}
+  ::selection{background:var(--red-tint);}
+
+  /* ---------- LOGIN ---------- */
+  #login-screen{
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:
+      radial-gradient(circle at 12% 18%, rgba(214,35,28,.06), transparent 40%),
+      radial-gradient(circle at 88% 82%, rgba(214,35,28,.06), transparent 40%),
+      var(--paper);
+    padding:24px;
+  }
+  .login-card{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 8px 28px rgba(28,27,26,.08);overflow:hidden;}
+  .login-brandbar{background:var(--red);padding:28px 32px 22px;position:relative;}
+  .login-brandbar::after{content:"";position:absolute;left:0;right:0;bottom:-8px;height:8px;background:repeating-linear-gradient(90deg,var(--red) 0 10px, transparent 10px 20px);}
+  .brand-mark{color:#fff;font-weight:800;font-size:22px;letter-spacing:.5px;display:flex;align-items:baseline;gap:6px;}
+  .brand-mark span{font-weight:500;font-size:12px;opacity:.85;letter-spacing:1.5px;text-transform:uppercase;font-family:'Inter',sans-serif;}
+  .brand-sub{color:#fff;opacity:.92;font-size:13px;margin-top:6px;}
+  .login-body{padding:30px 32px 26px;}
+  .login-body h2{font-size:17px;margin:0 0 4px;font-weight:600;}
+  .login-body p.hint{font-size:13px;color:var(--ink-soft);margin:0 0 20px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:6px;letter-spacing:.2px;}
+  .field input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;background:#fff;outline:none;transition:border-color .15s;}
+  .field input:focus{border-color:var(--red);}
+  #login-error{color:var(--red-dark);font-size:12.5px;margin:2px 0 12px;min-height:16px;font-weight:500;}
+  .btn-primary{width:100%;background:var(--red);color:#fff;border:none;padding:12px;border-radius:9px;font-weight:600;font-size:14.5px;letter-spacing:.2px;transition:background .15s;}
+  .btn-primary:hover{background:var(--red-dark);}
+
+  /* ---------- APP SHELL ---------- */
+  #app{display:none;min-height:100vh;}
+  .topbar{background:var(--card);border-bottom:1px solid var(--line);padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:62px;position:sticky;top:0;z-index:20;}
+  .topbar-left{display:flex;align-items:center;gap:14px;}
+  .logo-chip{width:36px;height:36px;background:var(--red);border-radius:9px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:14px;font-family:'Poppins',sans-serif;}
+  .topbar-title{font-weight:700;font-size:15px;}
+  .topbar-title small{display:block;font-weight:500;font-size:11.5px;color:var(--ink-soft);margin-top:1px;}
+  .topbar-right{display:flex;align-items:center;gap:14px;}
+  .user-chip{display:flex;align-items:center;gap:10px;padding:6px 10px 6px 6px;border:1px solid var(--line);border-radius:30px;background:#fff;}
+  .user-avatar{width:28px;height:28px;border-radius:50%;background:var(--red-tint);color:var(--red-dark);display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;}
+  .user-meta{line-height:1.2;}
+  .user-meta .name{font-size:12.5px;font-weight:600;}
+  .user-meta .role{font-size:10.5px;color:var(--ink-soft);}
+  .logout-btn{border:1px solid var(--line);background:#fff;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);}
+  .logout-btn:hover{border-color:var(--red);color:var(--red-dark);}
+
+  .head-badge{display:inline-flex;align-items:center;gap:4px;background:var(--red);color:#fff;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.3px;text-transform:uppercase;margin-left:6px;vertical-align:middle;}
+
+  .layout{display:flex;max-width:1360px;margin:0 auto;}
+  .sidebar{width:210px;flex:none;padding:22px 14px;position:sticky;top:62px;height:calc(100vh - 62px);}
+  .side-branch{margin-bottom:4px;}
+  .side-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-soft);font-weight:700;margin:0 8px 8px;}
+  .side-btn{display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;background:none;border:none;padding:9px 10px;border-radius:8px;font-size:13.5px;font-weight:500;color:var(--ink);margin-bottom:2px;}
+  .side-btn:hover{background:var(--red-tint);}
+  .side-btn.active{background:var(--red);color:#fff;font-weight:600;}
+  .side-btn .count{font-size:10.5px;background:rgba(0,0,0,.08);padding:1px 7px;border-radius:20px;}
+  .side-btn.active .count{background:rgba(255,255,255,.25);}
+  .main{flex:1;padding:24px 24px 60px;min-width:0;}
+
+  .page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px;}
+  .page-head h1{font-size:21px;margin:0;font-weight:700;}
+  .page-head p{margin:3px 0 0;font-size:13px;color:var(--ink-soft);}
+  .btn{border:1px solid var(--line);background:#fff;padding:9px 15px;border-radius:9px;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:6px;}
+  .btn:hover{border-color:var(--red);color:var(--red-dark);}
+  .btn-fill{background:var(--red);color:#fff;border-color:var(--red);}
+  .btn-fill:hover{background:var(--red-dark);border-color:var(--red-dark);color:#fff;}
+  .btn-ghost-sm{border:1px solid var(--line);background:#fff;padding:6px 11px;font-size:12px;border-radius:7px;font-weight:600;}
+  .actions-row{display:flex;gap:10px;flex-wrap:wrap;}
+
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:26px;}
+  .stat-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;}
+  .stat-card .lbl{font-size:11.5px;color:var(--ink-soft);font-weight:600;margin-bottom:6px;text-transform:uppercase;letter-spacing:.3px;}
+  .stat-card .val{font-size:26px;font-weight:700;font-family:'Poppins',sans-serif;}
+  .stat-card .val small{font-size:13px;font-weight:600;color:var(--ink-soft);}
+  .stat-card.red .val{color:var(--red-dark);}
+  .stat-card.amber .val{color:var(--amber);}
+  .stat-card.green .val{color:var(--green);}
+
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:22px;}
+  .panel-title{font-size:14.5px;font-weight:700;margin:0 0 14px;display:flex;align-items:center;justify-content:space-between;}
+
+  .bars{display:flex;flex-direction:column;gap:14px;}
+  .bar-row .bar-top{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px;}
+  .bar-row .bar-top .bname{font-weight:600;}
+  .bar-row .bar-top .bpct{color:var(--ink-soft);font-weight:600;}
+  .bar-track{height:9px;background:#F0EEE8;border-radius:6px;overflow:hidden;display:flex;}
+  .bar-fill{height:100%;background:var(--green);}
+  .bar-fill.mid{background:var(--amber);}
+  .bar-fill.low{background:var(--red);}
+
+  /* ---------- TICKET CARDS ---------- */
+  .ticket-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;}
+  .ticket{position:relative;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px 16px 14px 18px;}
+  .ticket::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:3px;background:var(--red);}
+  .ticket.status-verified::before{background:var(--amber);}
+  .ticket.status-closed::before{background:var(--green);}
+  .ticket-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;}
+  .ticket-id{font-family:'Roboto Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
+  .badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;}
+  .badge.open{background:var(--red-tint);color:var(--red-dark);}
+  .badge.verified{background:var(--amber-tint);color:var(--amber);}
+  .badge.closed{background:var(--green-tint);color:var(--green);}
+  .ticket h4{margin:2px 0 5px;font-size:14.5px;font-weight:600;}
+  .ticket .desc{font-size:12.5px;color:var(--ink-soft);line-height:1.5;margin-bottom:10px;}
+  .ticket .cat{display:inline-block;font-size:10.5px;background:#F3F2ED;color:var(--ink-soft);padding:2px 8px;border-radius:6px;font-weight:600;margin-bottom:10px;}
+  .ticket .meta-line{font-size:11.5px;color:var(--ink-soft);border-top:1px dashed var(--line);padding-top:9px;margin-top:2px;display:flex;flex-direction:column;gap:3px;}
+  .ticket .meta-line b{color:var(--ink);font-weight:600;}
+  .ticket .proof-note{background:#FBFAF7;border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:11.5px;margin-top:8px;color:var(--ink-soft);}
+  .ticket .proof-note b{color:var(--ink);}
+  .proof-media{margin-top:8px;}
+  .proof-media-label{font-size:10.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.3px;margin-bottom:5px;}
+  .proof-media img, .proof-media video{width:100%;max-height:190px;object-fit:cover;border-radius:8px;border:1px solid var(--line);display:block;background:#F3F2ED;}
+  .upload-box{border:1px dashed var(--line);border-radius:8px;padding:9px 10px;background:#FBFAF7;}
+  .upload-box input[type=file]{width:100%;font-size:12px;border:none;padding:0;}
+  .media-preview img{max-height:100px;border-radius:7px;margin-top:8px;display:block;border:1px solid var(--line);}
+  .media-preview .vid-name{font-size:11.5px;color:var(--ink-soft);margin-top:6px;}
+  .upload-hint{font-size:10.5px;color:var(--ink-soft);margin-top:5px;}
+  .ticket-cta{margin-top:12px;display:flex;gap:8px;}
+  .ticket-cta button{flex:1;}
+  .empty-state{padding:40px 20px;text-align:center;color:var(--ink-soft);font-size:13px;border:1px dashed var(--line);border-radius:12px;background:#FCFBF8;}
+
+  .filter-row{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .filter-row select{padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:12.5px;background:#fff;}
+
+  /* ---------- MODAL ---------- */
+  .modal-backdrop{display:none;position:fixed;inset:0;background:rgba(28,27,26,.45);z-index:100;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;}
+  .modal-backdrop.show{display:flex;}
+  .modal{background:#fff;border-radius:14px;width:100%;max-width:460px;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,.2);}
+  .modal h3{margin:0 0 4px;font-size:16px;}
+  .modal p.sub{margin:0 0 18px;font-size:12.5px;color:var(--ink-soft);}
+  .modal .field label{font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:5px;display:block;}
+  .modal .field{margin-bottom:13px;}
+  .modal input,.modal select,.modal textarea{width:100%;padding:10px 11px;border:1px solid var(--line);border-radius:8px;font-size:13.5px;outline:none;}
+  .modal textarea{resize:vertical;min-height:64px;}
+  .modal input:focus,.modal select:focus,.modal textarea:focus{border-color:var(--red);}
+  .modal-actions{display:flex;gap:10px;margin-top:18px;}
+  .modal-actions button{flex:1;padding:11px;}
+  .modal-close{position:absolute;}
+  .modal-head{display:flex;justify-content:space-between;align-items:flex-start;}
+  .x-btn{background:none;border:none;font-size:18px;color:var(--ink-soft);line-height:1;padding:2px 4px;}
+
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  @media(max-width:720px){.two-col{grid-template-columns:1fr;} .sidebar{display:none;} .layout{display:block;} .main{padding:18px;}}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-brandbar">
+      <div class="brand-mark">MAXBACHAT <span>Super Market</span></div>
+      <div class="brand-sub">Maintenance Department &mdash; Performance Portal</div>
+    </div>
+    <div class="login-body">
+      <h2>Sign in</h2>
+      <p class="hint">Enter your issued ID or phone number and password to continue.</p>
+      <div class="field">
+        <label>User ID / phone</label>
+        <input id="login-id" type="text" placeholder="e.g. CAP-BR1 or +923001234567" autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input id="login-pass" type="password" placeholder="Numeric password">
+      </div>
+      <div id="login-error"></div>
+      <button class="btn-primary" onclick="doLogin()">Sign in</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo-chip">MB</div>
+      <div class="topbar-title">MAXBACHAT<small>Maintenance Performance Dashboard</small></div>
+    </div>
+    <div class="topbar-right">
+      <div class="user-chip">
+        <div class="user-avatar" id="user-initials"></div>
+        <div class="user-meta">
+          <div class="name" id="user-name"></div>
+          <div class="role" id="user-role"></div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="openChangePasswordModal(false)">Account</button>
+      <button class="logout-btn" onclick="doLogout()">Log out</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="sidebar" id="sidebar"></div>
+    <div class="main" id="main"></div>
+  </div>
+</div>
+
+<!-- ============ MODAL ============ -->
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal" id="modal-box"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
