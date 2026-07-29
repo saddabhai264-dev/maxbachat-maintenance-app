@@ -3,10 +3,7 @@
   "buildCommand": "npm run vercel-build",
   "functions": {
     "api/index.js": {
-      "includeFiles": [
-        "backend/schema.sql",
-        "frontend/**"
-      ],
+      "includeFiles": "{backend/schema.sql,frontend/**}",
       "maxDuration": 60
     }
   },
