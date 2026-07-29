@@ -54,5 +54,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong' });
 });
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`MAXBACHAT maintenance API running on port ${PORT}`));
+if (require.main === module) {
+  const PORT = process.env.PORT || 4000;
+  app.listen(PORT, () => console.log(`MAXBACHAT maintenance API running on port ${PORT}`));
+}
+
+module.exports = app;
