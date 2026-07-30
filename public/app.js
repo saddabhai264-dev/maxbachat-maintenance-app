@@ -135,16 +135,11 @@ async function uploadCompressedPhoto(file){
     reader.onload = () => resolve(String(reader.result).split(',')[1]);
     reader.readAsDataURL(blob);
   });
-  const uploaded = await apiFetch('/media/upload', {
-    method:'POST',
-    body: JSON.stringify({
-      filename: (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg',
-      contentType: 'image/jpeg',
-      size: blob.size,
-      dataBase64
-    })
-  });
-  return { type: uploaded.type, key: uploaded.key };
+  return {
+    type: 'image',
+    key: `inline/${Date.now()}.jpg`,
+    url: `data:image/jpeg;base64,${dataBase64}`
+  };
 }
 
 /* ===================== LOGIN ===================== */

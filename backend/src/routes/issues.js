@@ -16,10 +16,12 @@ function genId() {
 async function insertMedia(issueId, list, phase) {
   if (!Array.isArray(list)) return;
   for (const m of list) {
-    if (!m || !m.key || !m.type) continue;
+    if (!m || !m.type || (!m.key && !m.url)) continue;
+    const key = m.key || `inline/${Date.now()}`;
+    const url = m.url || publicUrlFor(key);
     await pool.query(
       `INSERT INTO issue_media (issue_id, phase, media_type, spaces_key, url) VALUES ($1,$2,$3,$4,$5)`,
-      [issueId, phase, m.type, m.key, publicUrlFor(m.key)]
+      [issueId, phase, m.type, key, url]
     );
   }
 }
@@ -39,7 +41,7 @@ async function mediaForClient(media) {
   if (!privateMedia) return media;
   return Promise.all(media.map(async m => ({
     ...m,
-    url: await presignGetUrl(m.spaces_key)
+    url: m.spaces_key && m.spaces_key.startsWith('inline/') ? m.url : await presignGetUrl(m.spaces_key)
   })));
 }
 
