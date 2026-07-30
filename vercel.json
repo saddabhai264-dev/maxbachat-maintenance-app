@@ -7,10 +7,10 @@
       "maxDuration": 60
     }
   },
+  "outputDirectory": "public",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" },
     { "source": "/health", "destination": "/api/index.js" },
-    { "source": "/health/db", "destination": "/api/index.js" },
-    { "source": "/(.*)", "destination": "/api/index.js" }
+    { "source": "/health/db", "destination": "/api/index.js" }
   ]
 }

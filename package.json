@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "vercel-build": "node backend/migrate.js && node backend/seed.js"
+    "vercel-build": "node backend/migrate.js && node backend/seed.js && node scripts/copy-frontend.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.624.0",
