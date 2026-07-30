@@ -79,10 +79,20 @@ function todayStr(){ return new Date().toISOString().slice(0,10); }
 function fmtDate(d){ if(!d) return '\u2014'; const dt=new Date(d); return dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
 
 /* ===================== MEDIA UPLOAD (direct to Spaces via presigned URL) ===================== */
+function mediaTypeFor(file){
+  const name = (file && file.name || '').toLowerCase();
+  if(file && file.type) return file.type;
+  if(/\.(jpe?g|png|webp|gif|heic|heif)$/i.test(name)) return 'image/jpeg';
+  if(/\.(mp4|mov|m4v|webm)$/i.test(name)) return 'video/mp4';
+  return 'application/octet-stream';
+}
+
 async function uploadMediaFile(file){
   if(!file) return null;
-  const isVideo = file.type.startsWith('video/');
-  if(file.type.startsWith('image/')) return uploadCompressedPhoto(file);
+  const mediaType = mediaTypeFor(file);
+  const isVideo = mediaType.startsWith('video/');
+  if(mediaType.startsWith('image/')) return uploadCompressedPhoto(file);
+  if(!isVideo) throw new Error('Please choose a photo or video file.');
   const maxBytes = isVideo ? 60*1024*1024 : 15*1024*1024;
   if(file.size > maxBytes){
     alert(`That file is too large (max ${isVideo ? '60MB for video' : '15MB for photos'}). Please choose a smaller file.`);
@@ -90,9 +100,9 @@ async function uploadMediaFile(file){
   }
   const presign = await apiFetch('/media/presign', {
     method:'POST',
-    body: JSON.stringify({ filename:file.name, contentType:file.type, size:file.size })
+    body: JSON.stringify({ filename:file.name, contentType:mediaType, size:file.size })
   });
-  const uploadHeaders = {'Content-Type':file.type};
+  const uploadHeaders = {'Content-Type':mediaType};
   if(presign.acl) uploadHeaders['x-amz-acl'] = presign.acl;
   const putRes = await fetch(presign.uploadUrl, { method:'PUT', headers:uploadHeaders, body:file });
   if(!putRes.ok) throw new Error('File upload to storage failed');
