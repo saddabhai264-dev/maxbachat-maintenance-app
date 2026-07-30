@@ -56,4 +56,4 @@ Open:
 
 Vercel Hobby is a short-term testing workaround. For company production, move to a paid/company-owned host when possible.
 
-After changing environment variables, create a fresh deployment from the latest commit.
+After changing environment variables, create a fresh deployment from the latest commit. If Vercel logs show an older commit hash, redeploy from the newest GitHub commit.
