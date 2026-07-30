@@ -138,6 +138,35 @@ router.post('/', async (req, res) => {
   }
 });
 
+// DELETE /api/issues/:id -> captain/reporter can remove their own open issue before it is verified.
+router.delete('/:id', async (req, res) => {
+  const u = req.user;
+  if (!['captain', 'reporter', 'admin'].includes(u.role)) return res.status(403).json({ error: 'Not allowed' });
+
+  try {
+    const { rows } = await pool.query('SELECT id, branch_code, status, opened_by, title FROM issues WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
+
+    const issue = rows[0];
+    const isAdmin = u.role === 'admin';
+    const ownsOpenIssue = issue.status === 'open' && issue.opened_by === u.id && issue.branch_code === u.branch;
+    if (!isAdmin && !ownsOpenIssue) {
+      return res.status(403).json({ error: 'Only your own open issue can be deleted' });
+    }
+
+    await pool.query('DELETE FROM issues WHERE id=$1', [req.params.id]);
+    await logAudit(u, 'issue_deleted', 'issue', req.params.id, {
+      branch: issue.branch_code,
+      title: issue.title,
+      status: issue.status
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not delete issue' });
+  }
+});
+
 // POST /api/issues/:id/verify  -> auditor verifies an open issue in their own branch
 router.post('/:id/verify', async (req, res) => {
   const u = req.user;

@@ -582,6 +582,11 @@ function ticketCard(i, mode){
   let cta = '';
   if(mode==='verify' && i.status==='open') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openVerifyModal('${i.id}')">Verify issue</button></div>`;
   if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Mark as resolved</button></div>`;
+  const canDelete = currentUser && ['captain','reporter'].includes(currentUser.role) && i.status==='open' && i.openedBy===currentUser.id;
+  if(canDelete){
+    const deleteButton = `<button class="btn-ghost-sm" style="width:100%;color:var(--red-dark);border-color:var(--red-tint);" onclick="openDeleteIssueModal('${i.id}')">Delete issue</button>`;
+    cta = cta ? cta.replace('</div>', `${deleteButton}</div>`) : `<div class="ticket-cta">${deleteButton}</div>`;
+  }
 
   return `<div class="ticket status-${i.status}">
     <div class="ticket-top"><span class="ticket-id">${i.id}${i.isOld?' \u00b7 backdated':''}</span>${badge}</div>
@@ -910,6 +915,33 @@ async function submitVerify(id){
   }catch(e){
     alert(e.message || 'Could not verify this issue.');
     if(saveBtn){ saveBtn.textContent='Mark as verified'; saveBtn.disabled=false; }
+  }
+}
+
+function openDeleteIssueModal(id){
+  const i = ISSUES.find(x=>x.id===id);
+  if(!i) return;
+  showModal(`
+    <div class="modal-head"><h3>Delete issue</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">${escapeHtml(i.title)}</p>
+    <div class="proof-note">This will remove the issue and its uploaded proof from the dashboard. Use this only when the issue was added by mistake.</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitDeleteIssue('${id}')">Delete issue</button>
+    </div>
+  `);
+}
+async function submitDeleteIssue(id){
+  const saveBtn = document.querySelector('.modal-actions .btn-fill');
+  if(saveBtn){ saveBtn.textContent='Deleting...'; saveBtn.disabled=true; }
+  try{
+    await apiFetch(`/issues/${id}`, { method:'DELETE' });
+    await loadIssues();
+    closeModal();
+    renderSidebar(); renderMain();
+  }catch(e){
+    alert(e.message || 'Could not delete this issue.');
+    if(saveBtn){ saveBtn.textContent='Delete issue'; saveBtn.disabled=false; }
   }
 }
 
