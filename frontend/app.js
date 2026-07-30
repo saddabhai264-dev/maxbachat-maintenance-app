@@ -65,12 +65,6 @@ function normalizeIssue(i){
   return {
     id:i.id, branch:i.branch_code, title:i.title, category:i.category, description:i.description,
     status:i.status, isOld:i.is_old,
-    estimatedCost:i.estimated_cost ? Number(i.estimated_cost) : null,
-    approvalRequired:i.approval_required,
-    approvalStatus:i.approval_status,
-    approvedByName:i.approved_by_name,
-    approvedAt:i.approved_at,
-    approvalNote:i.approval_note,
     openProof:i.open_proof,
     openProofMedia: openMedia ? {type:openMedia.media_type, dataUrl:openMedia.url} : null,
     openedBy:i.opened_by, openedByName:i.opened_by_name, openedAt:i.opened_at,
@@ -88,6 +82,7 @@ function fmtDate(d){ if(!d) return '\u2014'; const dt=new Date(d); return dt.toL
 async function uploadMediaFile(file){
   if(!file) return null;
   const isVideo = file.type.startsWith('video/');
+  if(file.type.startsWith('image/')) return uploadCompressedPhoto(file);
   const maxBytes = isVideo ? 60*1024*1024 : 15*1024*1024;
   if(file.size > maxBytes){
     alert(`That file is too large (max ${isVideo ? '60MB for video' : '15MB for photos'}). Please choose a smaller file.`);
@@ -102,6 +97,44 @@ async function uploadMediaFile(file){
   const putRes = await fetch(presign.uploadUrl, { method:'PUT', headers:uploadHeaders, body:file });
   if(!putRes.ok) throw new Error('File upload to storage failed');
   return { type: presign.type, key: presign.key };
+}
+
+function canvasToBlob(canvas, type, quality){
+  return new Promise(resolve => canvas.toBlob(resolve, type, quality));
+}
+
+async function uploadCompressedPhoto(file){
+  const img = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = URL.createObjectURL(file);
+  });
+  const maxSide = 1280;
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  URL.revokeObjectURL(img.src);
+  const blob = await canvasToBlob(canvas, 'image/jpeg', 0.78);
+  if(!blob) throw new Error('Could not prepare photo');
+  if(blob.size > 3*1024*1024) throw new Error('Photo is too large after compression. Please choose a smaller photo.');
+  const dataBase64 = await new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1]);
+    reader.readAsDataURL(blob);
+  });
+  const uploaded = await apiFetch('/media/upload', {
+    method:'POST',
+    body: JSON.stringify({
+      filename: (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg',
+      contentType: 'image/jpeg',
+      size: blob.size,
+      dataBase64
+    })
+  });
+  return { type: uploaded.type, key: uploaded.key };
 }
 
 /* ===================== LOGIN ===================== */
@@ -486,7 +519,6 @@ function renderCEO(){
   const open = ISSUES.filter(i=>i.status==='open').length;
   const verified = ISSUES.filter(i=>i.status==='verified').length;
   const closed = ISSUES.filter(i=>i.status==='closed').length;
-  const approvals = ISSUES.filter(i=>i.approvalStatus==='pending').sort((a,b)=> new Date(b.openedAt)-new Date(a.openedAt));
   const pct = total ? Math.round((closed/total)*100) : 0;
 
   m.innerHTML = `
@@ -496,12 +528,7 @@ function renderCEO(){
     <div class="stat-grid">
       <div class="stat-card"><div class="lbl">Total issues logged</div><div class="val">${total}</div></div>
       <div class="stat-card red"><div class="lbl">Awaiting action</div><div class="val">${open+verified}</div></div>
-      <div class="stat-card amber"><div class="lbl">Pending approvals</div><div class="val">${approvals.length}</div></div>
       <div class="stat-card green"><div class="lbl">Resolved</div><div class="val">${closed} <small>(${pct}%)</small></div></div>
-    </div>
-    <div class="panel">
-      <div class="panel-title">CEO approval queue</div>
-      <div class="ticket-grid" id="ceo-approval-list"></div>
     </div>
     <div class="panel">
       <div class="panel-title">Resolution rate by branch / location</div>
@@ -515,7 +542,6 @@ function renderCEO(){
       </div>
     </div>
   `;
-  renderTicketGrid('ceo-approval-list', approvals, 'approve');
 }
 
 /* ===================== TICKET GRID ===================== */
@@ -543,10 +569,6 @@ function ticketCard(i, mode){
   </div>`;
   let proofs = '';
   if(i.openProof) proofs += `<div class="proof-note"><b>Opening proof:</b> ${escapeHtml(i.openProof)}</div>`;
-  if(i.estimatedCost) proofs += `<div class="proof-note"><b>Estimated cost:</b> PKR ${i.estimatedCost.toLocaleString('en-US')}</div>`;
-  if(i.approvalStatus && i.approvalStatus !== 'not_required') {
-    proofs += `<div class="proof-note"><b>CEO approval:</b> ${escapeHtml(i.approvalStatus)}${i.approvedByName ? ' by '+escapeHtml(i.approvedByName)+' · '+fmtDate(i.approvedAt) : ''}${i.approvalNote ? '<br>'+escapeHtml(i.approvalNote) : ''}</div>`;
-  }
   proofs += mediaBlock(i.openProofMedia, 'Opening photo / video');
   if(i.auditorNote) proofs += `<div class="proof-note"><b>Auditor note:</b> ${escapeHtml(i.auditorNote)}</div>`;
   if(i.closeProof) proofs += `<div class="proof-note"><b>Closure proof:</b> ${escapeHtml(i.closeProof)}</div>`;
@@ -554,8 +576,7 @@ function ticketCard(i, mode){
 
   let cta = '';
   if(mode==='verify' && i.status==='open') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openVerifyModal('${i.id}')">Verify issue</button></div>`;
-  if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')" ${i.approvalStatus==='pending' || i.approvalStatus==='rejected' ? 'disabled' : ''}>${i.approvalStatus==='pending' ? 'Waiting CEO approval' : i.approvalStatus==='rejected' ? 'Approval rejected' : 'Mark as resolved'}</button></div>`;
-  if(mode==='approve' && i.approvalStatus==='pending') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" onclick="openApprovalModal('${i.id}','approved')">Approve</button><button class="btn-ghost-sm" onclick="openApprovalModal('${i.id}','rejected')">Reject</button></div>`;
+  if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Mark as resolved</button></div>`;
 
   return `<div class="ticket status-${i.status}">
     <div class="ticket-top"><span class="ticket-id">${i.id}${i.isOld?' \u00b7 backdated':''}</span>${badge}</div>
@@ -735,36 +756,6 @@ async function submitPhone(id){
   }catch(e){ err.textContent = e.message || 'Could not save phone.'; }
 }
 
-function openApprovalModal(id, decision){
-  const i = ISSUES.find(x=>x.id===id);
-  showModal(`
-    <div class="modal-head"><h3>${decision === 'approved' ? 'Approve' : 'Reject'} issue</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
-    <p class="sub">${escapeHtml(i.title)}${i.estimatedCost ? ' · PKR '+i.estimatedCost.toLocaleString('en-US') : ''}</p>
-    <div class="field"><label>Decision note</label><textarea id="f-approval-note" placeholder="Optional note for maintenance team"></textarea></div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-fill" onclick="submitApproval('${id}','${decision}')">${decision === 'approved' ? 'Approve' : 'Reject'}</button>
-    </div>
-  `);
-}
-
-async function submitApproval(id, decision){
-  const saveBtn = document.querySelector('.modal-actions .btn-fill');
-  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
-  try{
-    await apiFetch(`/issues/${id}/approval`, {
-      method:'POST',
-      body: JSON.stringify({ decision, note: document.getElementById('f-approval-note').value.trim() })
-    });
-    await loadIssues();
-    closeModal();
-    renderSidebar(); renderMain();
-  }catch(e){
-    alert(e.message || 'Could not save approval.');
-    if(saveBtn){ saveBtn.textContent = decision === 'approved' ? 'Approve' : 'Reject'; saveBtn.disabled=false; }
-  }
-}
-
 function openIssueModal(isOld){
   const u = currentUser;
   showModal(`
@@ -776,14 +767,6 @@ function openIssueModal(isOld){
       <div class="field"><label>Date opened</label><input id="f-date" type="date" value="${todayStr()}" ${isOld?'':'max="'+todayStr()+'"'}></div>
     </div>
     <div class="field"><label>Description</label><textarea id="f-desc" placeholder="Describe the issue in detail"></textarea></div>
-    <div class="two-col">
-      <div class="field"><label>Estimated cost (PKR)</label><input id="f-cost" type="number" min="0" step="1000" placeholder="e.g. 400000"></div>
-      <div class="field"><label>CEO approval</label><select id="f-approval">
-        <option value="auto">Auto by cost</option>
-        <option value="yes">Required</option>
-        <option value="no">Not required</option>
-      </select></div>
-    </div>
     <div class="field"><label>Proof note (description)</label><textarea id="f-proof" placeholder="e.g. Freezer door hinge broken, ice buildup visible"></textarea></div>
     <div class="field">
       <label>Proof photo / video</label>
@@ -867,8 +850,6 @@ async function submitIssue(isOld){
       openProof: document.getElementById('f-proof').value.trim(),
       openedAt: document.getElementById('f-date').value || todayStr(),
       isOld: !!isOld,
-      estimatedCost: Number(document.getElementById('f-cost').value || 0),
-      approvalRequired: document.getElementById('f-approval').value === 'yes',
       openMedia: openMedia ? [openMedia] : []
     };
 

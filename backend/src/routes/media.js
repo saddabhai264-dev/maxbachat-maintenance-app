@@ -1,7 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { requireAuth, requirePasswordReady } = require('../auth');
-const { presignPutUrl, publicUrlFor } = require('../spaces');
+const { presignPutUrl, publicUrlFor, uploadObject } = require('../spaces');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -40,6 +40,39 @@ router.post('/presign', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Could not prepare upload' });
+  }
+});
+
+// POST /api/media/upload { filename, contentType, dataBase64, size }
+// Server-side upload path for compressed photos. Avoids browser-to-Spaces CORS issues.
+router.post('/upload', async (req, res) => {
+  if (!['captain', 'reporter', 'coordinator'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Not allowed' });
+  }
+  const { filename, contentType, dataBase64, size } = req.body || {};
+  if (!filename || !contentType || !dataBase64 || !Number.isFinite(Number(size))) {
+    return res.status(400).json({ error: 'filename, contentType, dataBase64 and size required' });
+  }
+  if (!contentType.startsWith('image/')) {
+    return res.status(400).json({ error: 'Server upload supports photos only' });
+  }
+  if (Number(size) <= 0 || Number(size) > 3 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Photo is too large. Please choose a smaller photo.' });
+  }
+
+  const ext = (filename.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+  const key = `issues/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.${ext}`;
+
+  try {
+    await uploadObject(key, contentType, Buffer.from(dataBase64, 'base64'));
+    res.json({
+      key,
+      publicUrl: publicUrlFor(key),
+      type: 'image'
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not upload photo' });
   }
 });
 

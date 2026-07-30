@@ -3,7 +3,7 @@ const pool = require('../db');
 const { requireAuth, requirePasswordReady } = require('../auth');
 const { publicUrlFor, presignGetUrl } = require('../spaces');
 const { logAudit } = require('../audit');
-const { notifyUsers, allMaintenanceUsers, ceoUsers } = require('../notifications');
+const { notifyUsers, allMaintenanceUsers } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -43,10 +43,6 @@ async function mediaForClient(media) {
   })));
 }
 
-function approvalThreshold() {
-  return Number(process.env.CEO_APPROVAL_THRESHOLD || 300000);
-}
-
 // GET /api/issues  -> scoped by role. Admin/CEO/head see all; branch users see their queue.
 router.get('/', async (req, res) => {
   try {
@@ -73,7 +69,6 @@ router.post('/', async (req, res) => {
 
   const {
     title, category, description, openProof, openedAt, isOld, openMedia,
-    estimatedCost, approvalRequired,
     statusOverride, verifiedByName, verifiedAt, auditorNote,
     closedByName, closedAt, closeProof, closeMedia
   } = req.body || {};
@@ -84,10 +79,7 @@ router.post('/', async (req, res) => {
   let status = 'open';
   let vName = null, vAt = null, vNote = null;
   let cName = null, cAt = null, cNote = null;
-  const cost = Number(estimatedCost || 0);
-  const needsApproval = !!approvalRequired || cost >= approvalThreshold();
-  const approvalStatus = needsApproval ? 'pending' : 'not_required';
-  const approvalRequestedAt = needsApproval ? new Date().toISOString() : null;
+  const approvalStatus = 'not_required';
 
   if (u.role === 'reporter') {
     // No local auditor for this location — route straight to the maintenance team head.
@@ -113,16 +105,16 @@ router.post('/', async (req, res) => {
       `INSERT INTO issues
          (id, branch_code, title, category, description, status, is_old, open_proof,
           opened_by, opened_by_name, opened_at, verified_by_name, verified_at, auditor_note,
-          closed_by_name, closed_at, close_proof, estimated_cost, approval_required,
-          approval_status, approval_requested_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+          closed_by_name, closed_at, close_proof, approval_required,
+          approval_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
       [id, u.branch, title, category, description, status, !!isOld, openProof || null,
         u.id, u.name, openedAt || new Date().toISOString(), vName, vAt, vNote, cName, cAt, cNote,
-        cost || null, needsApproval, approvalStatus, approvalRequestedAt]
+        false, approvalStatus]
     );
     await insertMedia(id, openMedia, 'open');
     await insertMedia(id, closeMedia, 'close');
-    await logAudit(u, 'issue_created', 'issue', id, { branch: u.branch, status, estimatedCost: cost || null, approvalStatus });
+    await logAudit(u, 'issue_created', 'issue', id, { branch: u.branch, status });
     await notifyUsers(
       await allMaintenanceUsers(),
       id,
@@ -135,14 +127,6 @@ router.post('/', async (req, res) => {
         id,
         'issue_verified',
         `MAXBACHAT: Issue ${id} is ready for maintenance action at ${u.branch}. ${title}`
-      );
-    }
-    if (needsApproval) {
-      await notifyUsers(
-        await ceoUsers(),
-        id,
-        'approval_requested',
-        `CEO approval needed for issue ${id}. Estimated cost: ${cost || 'not provided'}. ${title}`
       );
     }
     res.json({ id });
@@ -173,14 +157,6 @@ router.post('/:id/verify', async (req, res) => {
         'issue_verified',
         `MAXBACHAT: Issue ${req.params.id} verified at ${issue.rows[0].branch_code}. ${issue.rows[0].title}`
       );
-      if (issue.rows[0].approval_status === 'pending') {
-        await notifyUsers(
-          await ceoUsers(),
-          req.params.id,
-          'approval_requested',
-          `CEO approval pending for verified issue ${req.params.id}: ${issue.rows[0].title}`
-        );
-      }
     }
     res.json({ ok: true });
   } catch (e) {
@@ -196,13 +172,10 @@ router.post('/:id/close', async (req, res) => {
   const { note, media } = req.body || {};
 
   try {
-    const { rows } = await pool.query('SELECT branch_code, status, approval_status FROM issues WHERE id=$1', [req.params.id]);
+    const { rows } = await pool.query('SELECT branch_code, status FROM issues WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
     if (!u.routes.includes(rows[0].branch_code)) return res.status(403).json({ error: 'This issue is not in your queue' });
     if (rows[0].status !== 'verified') return res.status(400).json({ error: 'Issue must be verified before it can be resolved' });
-    if (rows[0].approval_status === 'pending') return res.status(403).json({ error: 'CEO approval is pending for this issue' });
-    if (rows[0].approval_status === 'rejected') return res.status(403).json({ error: 'CEO rejected this repair approval' });
-
     await pool.query(
       `UPDATE issues SET status='closed', closed_by=$1, closed_by_name=$2, closed_at=now(), close_proof=$3
        WHERE id=$4`,
@@ -220,36 +193,6 @@ router.post('/:id/close', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Could not resolve issue' });
-  }
-});
-
-router.post('/:id/approval', async (req, res) => {
-  const u = req.user;
-  if (u.role !== 'ceo' && u.role !== 'admin') return res.status(403).json({ error: 'CEO approval access required' });
-  const { decision, note } = req.body || {};
-  if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be approved or rejected' });
-
-  try {
-    const { rows } = await pool.query('SELECT branch_code, title, approval_status FROM issues WHERE id=$1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
-    if (rows[0].approval_status !== 'pending') return res.status(400).json({ error: 'Issue is not pending approval' });
-
-    await pool.query(
-      `UPDATE issues SET approval_status=$1, approved_by=$2, approved_by_name=$3, approved_at=now(), approval_note=$4
-       WHERE id=$5`,
-      [decision, u.id, u.name, note || null, req.params.id]
-    );
-    await logAudit(u, `issue_${decision}`, 'issue', req.params.id, { note: note || null });
-    await notifyUsers(
-      await allMaintenanceUsers(),
-      req.params.id,
-      `approval_${decision}`,
-      `MAXBACHAT: CEO approval ${decision} for issue ${req.params.id}. ${rows[0].title}`
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Could not save approval decision' });
   }
 });
 

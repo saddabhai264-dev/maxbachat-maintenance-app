@@ -28,6 +28,17 @@ function presignPutUrl(key, contentType, expiresSeconds = 300) {
   return getSignedUrl(s3, command, { expiresIn: expiresSeconds });
 }
 
+async function uploadObject(key, contentType, body) {
+  const input = {
+    Bucket: process.env.SPACES_BUCKET,
+    Key: key,
+    ContentType: contentType,
+    Body: body
+  };
+  if (process.env.MEDIA_PUBLIC_READ === 'true') input.ACL = 'public-read';
+  await s3.send(new PutObjectCommand(input));
+}
+
 function presignGetUrl(key, expiresSeconds = 900) {
   const command = new GetObjectCommand({
     Bucket: process.env.SPACES_BUCKET,
@@ -40,4 +51,4 @@ function publicUrlFor(key) {
   return `${process.env.SPACES_URL}/${key}`;
 }
 
-module.exports = { s3, presignPutUrl, presignGetUrl, publicUrlFor };
+module.exports = { s3, presignPutUrl, presignGetUrl, uploadObject, publicUrlFor };

@@ -17,7 +17,7 @@ app.set('trust proxy', 1);
 const allowedOrigin = process.env.CORS_ORIGIN || '*';
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({ origin: allowedOrigin }));
-app.use(express.json({ limit: '1mb' })); // file bytes never pass through this server, so this can stay small
+app.use(express.json({ limit: '8mb' }));
 
 app.use('/api/auth/login', rateLimit({
   windowMs: 15 * 60 * 1000,
