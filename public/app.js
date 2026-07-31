@@ -326,11 +326,13 @@ function performanceRows(){
     const verified = list.filter(i=>i.status!=='open');
     const resolutionDays = closed.map(i=>daysBetween(i.openedAt, i.closedAt));
     const avgDays = avg(resolutionDays);
-    const sameDay = closed.filter(i=>daysBetween(i.openedAt, i.closedAt) !== null && daysBetween(i.openedAt, i.closedAt) <= 1).length;
     const pending = list.filter(i=>i.status!=='closed');
     const oldestPendingDays = pending.length ? Math.max(...pending.map(i=>daysBetween(i.openedAt, new Date()) || 0)) : 0;
-    const efficiency = closed.length ? Math.round((sameDay / closed.length) * 100) : 0;
-    const accuracy = list.length ? Math.round((verified.length / list.length) * 100) : 0;
+    const closureRate = list.length ? closed.length / list.length : null;
+    const speedScore = avgDays === null ? 0 : Math.max(0, Math.min(1, (7 - avgDays) / 7));
+    const pendingPenalty = Math.max(0, Math.min(1, oldestPendingDays / 7));
+    const efficiency = list.length ? Math.round(((closureRate * 0.60) + (speedScore * 0.25) + ((1 - pendingPenalty) * 0.15)) * 100) : null;
+    const verificationRate = list.length ? Math.round((verified.length / list.length) * 100) : null;
     return {
       ...t,
       total:list.length,
@@ -339,15 +341,17 @@ function performanceRows(){
       avgDays,
       oldestPendingDays,
       efficiency,
-      accuracy
+      verificationRate
     };
   });
 }
 function scoreClass(score){
+  if(score === null) return 'mid';
   if(score >= 75) return '';
   if(score >= 45) return 'mid';
   return 'low';
 }
+function scoreText(score){ return score === null ? 'N/A' : score + '%'; }
 function renderPerformanceDashboard(){
   const rows = performanceRows();
   return `
@@ -355,7 +359,7 @@ function renderPerformanceDashboard(){
       <div class="panel-title">Maintenance team performance</div>
       <div class="perf-table">
         <div class="perf-row perf-head">
-          <span>Team</span><span>Highlighted</span><span>Closed</span><span>Avg resolve</span><span>Efficiency</span><span>Accuracy</span>
+          <span>Team</span><span>Highlighted</span><span>Closed</span><span>Avg resolve</span><span>Efficiency</span><span>Verify rate</span>
         </div>
         ${rows.map(r=>`
           <div class="perf-row">
@@ -363,8 +367,8 @@ function renderPerformanceDashboard(){
             <span data-label="Highlighted">${r.total}</span>
             <span data-label="Closed">${r.closed}/${r.total || 0}<span class="perf-sub">${r.pending} pending</span></span>
             <span data-label="Avg resolve">${r.avgDays === null ? 'N/A' : r.avgDays.toFixed(1)+' days'}<span class="perf-sub">${Math.round(r.oldestPendingDays)}d oldest pending</span></span>
-            <span data-label="Efficiency"><span class="score-pill ${scoreClass(r.efficiency)}">${r.efficiency}%</span></span>
-            <span data-label="Accuracy"><span class="score-pill ${scoreClass(r.accuracy)}">${r.accuracy}%</span></span>
+            <span data-label="Efficiency"><span class="score-pill ${scoreClass(r.efficiency)}">${scoreText(r.efficiency)}</span></span>
+            <span data-label="Verify rate"><span class="score-pill ${scoreClass(r.verificationRate)}">${scoreText(r.verificationRate)}</span></span>
           </div>
         `).join('')}
       </div>
