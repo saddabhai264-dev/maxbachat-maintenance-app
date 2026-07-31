@@ -8,6 +8,7 @@ const path = require('path');
 const authRoutes = require('./src/routes/auth');
 const issueRoutes = require('./src/routes/issues');
 const mediaRoutes = require('./src/routes/media');
+const notificationRoutes = require('./src/routes/notifications');
 const userRoutes = require('./src/routes/users');
 const pool = require('./src/db');
 
@@ -40,6 +41,7 @@ app.get('/health/db', async (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/issues', issueRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/users', userRoutes);
 
 const frontendDir = path.join(__dirname, '..', 'frontend');

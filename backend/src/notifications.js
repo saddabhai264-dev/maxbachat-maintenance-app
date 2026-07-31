@@ -106,6 +106,43 @@ async function allMaintenanceUsers() {
   return rows;
 }
 
+async function maintenanceHeadUsers() {
+  const { rows } = await pool.query(
+    `SELECT id, name, phone, role
+     FROM users
+     WHERE is_active=true AND role='coordinator' AND is_head=true`
+  );
+  return rows;
+}
+
+async function forcedMaintenanceRecipients(branchCode) {
+  const routed = await coordinatorsForBranch(branchCode);
+  const heads = await maintenanceHeadUsers();
+  return [...routed, ...heads].filter((u, index, list) => (
+    u && u.id && list.findIndex(x => x.id === u.id) === index
+  ));
+}
+
+async function forceNotifyMaintenance(issue, openedBy) {
+  const recipients = await forcedMaintenanceRecipients(issue.branchCode);
+  const branch = issue.branchName || issue.branchCode;
+  const title = String(issue.title || '').trim();
+  const category = String(issue.category || '').trim();
+  const openedByName = openedBy && openedBy.name ? openedBy.name : 'Branch captain';
+  const message = [
+    'URGENT MAXBACHAT MAINTENANCE ALERT',
+    `Issue: ${issue.id}`,
+    `Branch: ${branch}`,
+    `Title: ${title}`,
+    category ? `Category: ${category}` : null,
+    `Reported by: ${openedByName}`,
+    'Please open the maintenance app and take action.'
+  ].filter(Boolean).join('\n');
+
+  await notifyUsers(recipients, issue.id, 'force_issue_created', message);
+  return recipients;
+}
+
 async function ceoUsers() {
   const { rows } = await pool.query(
     `SELECT id, name, phone, role FROM users WHERE is_active=true AND role='ceo'`
@@ -113,4 +150,14 @@ async function ceoUsers() {
   return rows;
 }
 
-module.exports = { dispatchNotification, notifyUsers, usersForIssueBranch, coordinatorsForBranch, allMaintenanceUsers, ceoUsers };
+module.exports = {
+  dispatchNotification,
+  notifyUsers,
+  usersForIssueBranch,
+  coordinatorsForBranch,
+  allMaintenanceUsers,
+  maintenanceHeadUsers,
+  forcedMaintenanceRecipients,
+  forceNotifyMaintenance,
+  ceoUsers
+};

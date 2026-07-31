@@ -22,8 +22,10 @@ let AUTH_TOKEN = null;
 let ISSUES = [];
 let USERS = [];
 let AUDIT_LOGS = [];
+let NOTIFICATIONS = [];
 let sidebarView = 'overview';
 let passwordChangeRequired = false;
+let notificationTimer = null;
 
 /* ===================== API HELPER ===================== */
 async function apiFetch(path, opts={}){
@@ -58,6 +60,18 @@ async function loadUsers(){
 async function loadAuditLogs(){
   AUDIT_LOGS = currentUser && currentUser.role === 'admin' ? await apiFetch('/users/audit/logs') : [];
 }
+async function loadNotifications(){
+  if(!currentUser || !['coordinator','admin'].includes(currentUser.role)){
+    NOTIFICATIONS = [];
+    return;
+  }
+  try{
+    NOTIFICATIONS = await apiFetch('/notifications/mine');
+  }catch(e){
+    console.error(e);
+    NOTIFICATIONS = [];
+  }
+}
 function normalizeIssue(i){
   const media = i.media || [];
   const openMedia = media.find(m=>m.phase==='open');
@@ -77,6 +91,11 @@ function normalizeIssue(i){
 function genLocalId(){ return 'tmp-' + Date.now(); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function fmtDate(d){ if(!d) return '\u2014'; const dt=new Date(d); return dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+function fmtDateTime(d){
+  if(!d) return '\u2014';
+  const dt = new Date(d);
+  return dt.toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
 
 /* ===================== MEDIA UPLOAD (direct to Spaces via presigned URL) ===================== */
 function mediaTypeFor(file){
@@ -167,6 +186,8 @@ function setSession(token, user){
 async function enterApp(){
   const u = currentUser;
   await loadIssues();
+  await loadNotifications();
+  startNotificationPolling();
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('user-initials').textContent = u.name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
@@ -179,6 +200,7 @@ async function enterApp(){
 function doLogout(){
   currentUser = null; AUTH_TOKEN = null;
   passwordChangeRequired = false;
+  if(notificationTimer){ clearInterval(notificationTimer); notificationTimer = null; }
   localStorage.removeItem('mb_token'); localStorage.removeItem('mb_user');
   document.getElementById('modal-backdrop').classList.remove('show');
   document.getElementById('app').style.display='none';
@@ -231,7 +253,9 @@ function renderSidebar(){
     ];
   } else if(u.role==='coordinator'){
     const mine = ISSUES.filter(i=>u.routes.includes(i.branch));
+    const forceCount = NOTIFICATIONS.filter(n=>n.event_type==='force_issue_created').length;
     items = [
+      {key:'force-alerts', label:'Force alerts', count: forceCount},
       {key:'pending-close', label:'Open issues', count: mine.filter(i=>i.status==='verified').length},
       {key:'sc-closed', label:'Resolved', count: mine.filter(i=>i.status==='closed').length},
     ];
@@ -245,7 +269,22 @@ function renderSidebar(){
     `<button class="side-btn ${sidebarView===it.key?'active':''}" onclick="setView('${it.key}')"><span>${it.label}</span><span class="count">${it.count}</span></button>`
   ).join('');
 }
-function setView(v){ sidebarView=v; renderSidebar(); renderMain(); }
+async function setView(v){
+  sidebarView=v;
+  if(v==='force-alerts') await loadNotifications();
+  renderSidebar();
+  renderMain();
+}
+
+function startNotificationPolling(){
+  if(notificationTimer){ clearInterval(notificationTimer); notificationTimer = null; }
+  if(!currentUser || !['coordinator','admin'].includes(currentUser.role)) return;
+  notificationTimer = setInterval(async () => {
+    await loadNotifications();
+    renderSidebar();
+    if(sidebarView==='force-alerts') renderMain();
+  }, 45000);
+}
 
 /* ===================== MAIN RENDER ===================== */
 function renderMain(){
@@ -461,7 +500,10 @@ function renderCoordinator(){
   const u = currentUser;
   const m = document.getElementById('main');
   let list, branchLabel;
-  if(sidebarView==='sc-headview'){
+  if(sidebarView==='force-alerts'){
+    list = ISSUES.filter(i=>u.routes.includes(i.branch));
+    branchLabel = u.routes.map(c=>branchName(c)).join(' + ');
+  } else if(sidebarView==='sc-headview'){
     list = ISSUES.slice();
     branchLabel = 'All branches';
   } else {
@@ -481,12 +523,33 @@ function renderCoordinator(){
       <div class="stat-card red"><div class="lbl">Open issues</div><div class="val">${st.verified}</div></div>
       <div class="stat-card green"><div class="lbl">Resolved</div><div class="val">${st.closed}</div></div>
     </div>
+    ${sidebarView==='force-alerts' ? `
+      <div class="panel">
+        <div class="panel-title">Recent force notifications</div>
+        <div class="bars">
+          ${renderNotificationRows(NOTIFICATIONS.filter(n=>n.event_type==='force_issue_created'))}
+        </div>
+      </div>
+    ` : ''}
     <div class="panel">
-      <div class="panel-title">${sidebarView==='pending-close' ? 'Open issues \u2014 ready to resolve' : sidebarView==='sc-headview' ? 'All branches, all issues' : 'Resolved issues'}</div>
+      <div class="panel-title">${sidebarView==='pending-close' ? 'Open issues \u2014 ready to resolve' : sidebarView==='sc-headview' ? 'All branches, all issues' : sidebarView==='force-alerts' ? 'Related branch issues' : 'Resolved issues'}</div>
       <div class="ticket-grid" id="sc-ticket-list"></div>
     </div>
   `;
   renderTicketGrid('sc-ticket-list', list, sidebarView==='pending-close' ? 'close' : 'view');
+}
+
+function renderNotificationRows(list){
+  if(!list.length) return '<div class="empty-state">No force notifications yet.</div>';
+  return list.map(n => `
+    <div class="bar-row" style="border-bottom:1px solid var(--line);padding-bottom:10px;">
+      <div class="bar-top">
+        <span class="bname">${escapeHtml(n.issue_id || 'Notification')}</span>
+        <span class="bpct">${escapeHtml(n.status || 'queued')} \u00b7 ${fmtDateTime(n.created_at)}</span>
+      </div>
+      <div class="desc" style="white-space:pre-line;">${escapeHtml(n.message || '')}${n.error ? '\nError: '+escapeHtml(n.error) : ''}</div>
+    </div>
+  `).join('');
 }
 
 /* ---------- REPORTER (JDC Warehouse / Mandi \u2014 no local team) ---------- */

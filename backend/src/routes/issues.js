@@ -3,7 +3,7 @@ const pool = require('../db');
 const { requireAuth, requirePasswordReady } = require('../auth');
 const { publicUrlFor, presignGetUrl } = require('../spaces');
 const { logAudit } = require('../audit');
-const { notifyUsers, allMaintenanceUsers } = require('../notifications');
+const { notifyUsers, allMaintenanceUsers, forceNotifyMaintenance } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -117,12 +117,14 @@ router.post('/', async (req, res) => {
     await insertMedia(id, openMedia, 'open');
     await insertMedia(id, closeMedia, 'close');
     await logAudit(u, 'issue_created', 'issue', id, { branch: u.branch, status });
-    await notifyUsers(
-      await allMaintenanceUsers(),
-      id,
-      'issue_created',
-      `MAXBACHAT: New issue ${id} at ${u.branch}. ${title}`
+    const forcedRecipients = await forceNotifyMaintenance(
+      { id, branchCode: u.branch, title, category },
+      u
     );
+    await logAudit(u, 'force_notification_sent', 'issue', id, {
+      branch: u.branch,
+      recipients: forcedRecipients.map(r => r.id)
+    });
     if (status === 'verified') {
       await notifyUsers(
         await allMaintenanceUsers(),
