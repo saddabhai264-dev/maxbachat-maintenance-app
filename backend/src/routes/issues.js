@@ -3,7 +3,7 @@ const pool = require('../db');
 const { requireAuth, requirePasswordReady } = require('../auth');
 const { publicUrlFor, presignGetUrl } = require('../spaces');
 const { logAudit } = require('../audit');
-const { notifyUsers, allMaintenanceUsers, forceNotifyMaintenance } = require('../notifications');
+const { notifyUsers, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -134,14 +134,6 @@ router.post('/', async (req, res) => {
       branch: u.branch,
       recipients: forcedRecipients.map(r => r.id)
     });
-    if (status === 'verified') {
-      await notifyUsers(
-        await allMaintenanceUsers(),
-        id,
-        'issue_verified',
-        `MAXBACHAT: Issue ${id} is ready for maintenance action at ${u.branch}. ${title}`
-      );
-    }
     res.json({ id });
   } catch (e) {
     console.error(e);
@@ -194,7 +186,7 @@ router.post('/:id/verify', async (req, res) => {
     const issue = await pool.query('SELECT title, branch_code, approval_status FROM issues WHERE id=$1', [req.params.id]);
     if (issue.rows[0]) {
       await notifyUsers(
-        await allMaintenanceUsers(),
+        await forcedMaintenanceRecipients(issue.rows[0].branch_code),
         req.params.id,
         'issue_verified',
         `MAXBACHAT: Issue ${req.params.id} verified at ${issue.rows[0].branch_code}. ${issue.rows[0].title}`
@@ -226,7 +218,7 @@ router.post('/:id/close', async (req, res) => {
     await insertMedia(req.params.id, media, 'close');
     await logAudit(u, 'issue_closed', 'issue', req.params.id, { branch: rows[0].branch_code });
     await notifyUsers(
-      await allMaintenanceUsers(),
+      await forcedMaintenanceRecipients(rows[0].branch_code),
       req.params.id,
       'issue_closed',
       `MAXBACHAT: Issue ${req.params.id} has been marked resolved at ${rows[0].branch_code}.`

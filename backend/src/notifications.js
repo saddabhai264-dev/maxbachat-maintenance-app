@@ -116,8 +116,9 @@ async function maintenanceHeadUsers() {
 }
 
 async function forcedMaintenanceRecipients(branchCode) {
+  const routed = await coordinatorsForBranch(branchCode);
   const heads = await maintenanceHeadUsers();
-  return heads.filter((u, index, list) => (
+  return [...routed, ...heads].filter((u, index, list) => (
     u && u.id && list.findIndex(x => x.id === u.id) === index
   ));
 }
