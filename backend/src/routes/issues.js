@@ -9,6 +9,15 @@ const router = express.Router();
 router.use(requireAuth);
 router.use(requirePasswordReady);
 
+const BRANCH_NAMES = {
+  BR1: 'Thandi Sarak',
+  BR2: 'Qasimabad',
+  BR3: 'MPK',
+  BR4: 'Latifabad',
+  JDC: 'JDC Warehouse',
+  MANDI: 'Mandi'
+};
+
 function genId() {
   return 'ISS-' + Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 90 + 10);
 }
@@ -118,7 +127,7 @@ router.post('/', async (req, res) => {
     await insertMedia(id, closeMedia, 'close');
     await logAudit(u, 'issue_created', 'issue', id, { branch: u.branch, status });
     const forcedRecipients = await forceNotifyMaintenance(
-      { id, branchCode: u.branch, title, category },
+      { id, branchCode: u.branch, branchName: BRANCH_NAMES[u.branch], title, category },
       u
     );
     await logAudit(u, 'force_notification_sent', 'issue', id, {
