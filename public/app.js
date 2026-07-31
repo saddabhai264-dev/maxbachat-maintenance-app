@@ -305,6 +305,72 @@ function statsFor(codes){
   const pct = total ? Math.round((closed/total)*100) : 0;
   return {total, open:list.filter(i=>i.status==='open').length, verified:list.filter(i=>i.status==='verified').length, closed, pct};
 }
+function daysBetween(start, end){
+  if(!start || !end) return null;
+  return Math.max(0, (new Date(end) - new Date(start)) / 86400000);
+}
+function avg(list){
+  const nums = list.filter(n=>Number.isFinite(n));
+  return nums.length ? nums.reduce((a,b)=>a+b,0) / nums.length : null;
+}
+function performanceRows(){
+  const teams = [
+    {code:'MT-BR1', name:'Fayaz - Head Maintenance', branches:['BR1','JDC','MANDI']},
+    {code:'MT-BR2', name:'Amjad - Qasimabad', branches:['BR2']},
+    {code:'MT-BR3', name:'Anees - MPK', branches:['BR3']},
+    {code:'MT-BR4', name:'Asad - Latifabad', branches:['BR4']}
+  ];
+  return teams.map(t=>{
+    const list = ISSUES.filter(i=>t.branches.includes(i.branch));
+    const closed = list.filter(i=>i.status==='closed');
+    const verified = list.filter(i=>i.status!=='open');
+    const resolutionDays = closed.map(i=>daysBetween(i.openedAt, i.closedAt));
+    const avgDays = avg(resolutionDays);
+    const sameDay = closed.filter(i=>daysBetween(i.openedAt, i.closedAt) !== null && daysBetween(i.openedAt, i.closedAt) <= 1).length;
+    const pending = list.filter(i=>i.status!=='closed');
+    const oldestPendingDays = pending.length ? Math.max(...pending.map(i=>daysBetween(i.openedAt, new Date()) || 0)) : 0;
+    const efficiency = closed.length ? Math.round((sameDay / closed.length) * 100) : 0;
+    const accuracy = list.length ? Math.round((verified.length / list.length) * 100) : 0;
+    return {
+      ...t,
+      total:list.length,
+      closed:closed.length,
+      pending:pending.length,
+      avgDays,
+      oldestPendingDays,
+      efficiency,
+      accuracy
+    };
+  });
+}
+function scoreClass(score){
+  if(score >= 75) return '';
+  if(score >= 45) return 'mid';
+  return 'low';
+}
+function renderPerformanceDashboard(){
+  const rows = performanceRows();
+  return `
+    <div class="panel">
+      <div class="panel-title">Maintenance team performance</div>
+      <div class="perf-table">
+        <div class="perf-row perf-head">
+          <span>Team</span><span>Highlighted</span><span>Closed</span><span>Avg resolve</span><span>Efficiency</span><span>Accuracy</span>
+        </div>
+        ${rows.map(r=>`
+          <div class="perf-row">
+            <span class="perf-name" data-label="Team">${escapeHtml(r.name)}<span class="perf-sub">${r.branches.map(branchName).join(' + ')}</span></span>
+            <span data-label="Highlighted">${r.total}</span>
+            <span data-label="Closed">${r.closed}/${r.total || 0}<span class="perf-sub">${r.pending} pending</span></span>
+            <span data-label="Avg resolve">${r.avgDays === null ? 'N/A' : r.avgDays.toFixed(1)+' days'}<span class="perf-sub">${Math.round(r.oldestPendingDays)}d oldest pending</span></span>
+            <span data-label="Efficiency"><span class="score-pill ${scoreClass(r.efficiency)}">${r.efficiency}%</span></span>
+            <span data-label="Accuracy"><span class="score-pill ${scoreClass(r.accuracy)}">${r.accuracy}%</span></span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
 
 /* ---------- ADMIN ---------- */
 function renderAdmin(){
@@ -336,6 +402,7 @@ function renderAdmin(){
       <div class="panel-title">Opened vs closed, by branch</div>
       <div style="position:relative;height:240px;"><canvas id="admin-chart"></canvas></div>
     </div>
+    ${renderPerformanceDashboard()}
     <div class="panel">
       <div class="panel-title">Branch resolution rate</div>
       <div class="bars">

@@ -117,6 +117,15 @@
   .bar-fill{height:100%;background:var(--green);}
   .bar-fill.mid{background:var(--amber);}
   .bar-fill.low{background:var(--red);}
+  .perf-table{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+  .perf-row{display:grid;grid-template-columns:1.35fr .7fr .7fr .8fr .8fr .8fr;gap:10px;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line);font-size:12.5px;}
+  .perf-row:last-child{border-bottom:none;}
+  .perf-head{background:#FBFAF7;color:var(--ink-soft);font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;}
+  .perf-name{font-weight:700;}
+  .perf-sub{display:block;font-size:10.5px;color:var(--ink-soft);font-weight:600;margin-top:2px;}
+  .score-pill{display:inline-flex;justify-content:center;min-width:54px;border-radius:999px;padding:4px 8px;background:var(--green-tint);color:var(--green);font-size:11px;font-weight:800;}
+  .score-pill.mid{background:var(--amber-tint);color:var(--amber);}
+  .score-pill.low{background:var(--red-tint);color:var(--red-dark);}
 
   /* ---------- TICKET CARDS ---------- */
   .ticket-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;}
@@ -201,6 +210,10 @@
     .panel{padding:13px;border-radius:10px;margin-bottom:14px;}
     .ticket-grid{grid-template-columns:1fr;gap:10px;}
     .ticket{padding:13px 13px 12px 15px;}
+    .perf-table{border:none;gap:10px;}
+    .perf-row{grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:10px;background:#fff;}
+    .perf-head{display:none;}
+    .perf-row span[data-label]::before{content:attr(data-label);display:block;color:var(--ink-soft);font-size:10px;text-transform:uppercase;font-weight:800;margin-bottom:2px;}
     .two-col{grid-template-columns:1fr;}
     .modal-backdrop{padding:14px 10px;align-items:flex-start;}
     .modal{padding:18px;border-radius:12px;}
