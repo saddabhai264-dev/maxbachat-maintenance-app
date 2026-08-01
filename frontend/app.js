@@ -25,6 +25,7 @@ let AUDIT_LOGS = [];
 let NOTIFICATIONS = [];
 let VISITS = [];
 let sidebarView = 'overview';
+let adminBranchFilter = 'all';
 let passwordChangeRequired = false;
 let notificationTimer = null;
 
@@ -248,6 +249,7 @@ function renderSidebar(){
       {key:'all-verified', label:'Verified', count: ISSUES.filter(i=>i.status==='verified').length},
       {key:'all-closed', label:'Closed', count: ISSUES.filter(i=>i.status==='closed').length},
       {key:'visits', label:'Visits', count: VISITS.length},
+      {key:'alerts', label:'Alerts', count: NOTIFICATIONS.filter(n=>n.status==='failed').length},
       {key:'users', label:'Users', count: ''},
       {key:'audit', label:'Audit log', count: ''},
     ];
@@ -286,7 +288,7 @@ function renderSidebar(){
 }
 async function setView(v){
   sidebarView=v;
-  if(v==='force-alerts') await loadNotifications();
+  if(v==='force-alerts' || v==='alerts') await loadNotifications();
   renderSidebar();
   renderMain();
 }
@@ -297,7 +299,7 @@ function startNotificationPolling(){
   notificationTimer = setInterval(async () => {
     await loadNotifications();
     renderSidebar();
-    if(sidebarView==='force-alerts') renderMain();
+    if(sidebarView==='force-alerts' || sidebarView==='alerts') renderMain();
   }, 45000);
 }
 
@@ -396,6 +398,7 @@ function renderAdmin(){
   if(sidebarView==='users') return renderAdminUsers();
   if(sidebarView==='audit') return renderAdminAudit();
   if(sidebarView==='visits') return renderAdminVisits();
+  if(sidebarView==='alerts') return renderAdminAlerts();
   const m = document.getElementById('main');
   const total = ISSUES.length;
   const open = ISSUES.filter(i=>i.status==='open').length;
@@ -434,12 +437,19 @@ function renderAdmin(){
       </div>
     </div>
     <div class="panel">
-      <div class="panel-title">Issue log</div>
+      <div class="panel-title">
+        <span>Issue log</span>
+        <select onchange="setAdminBranchFilter(this.value)" style="padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:12px;">
+          <option value="all" ${adminBranchFilter==='all'?'selected':''}>All branches</option>
+          ${BRANCHES.map(b=>`<option value="${b.code}" ${adminBranchFilter===b.code?'selected':''}>${b.code} - ${b.name}</option>`).join('')}
+        </select>
+      </div>
       <div class="ticket-grid" id="admin-ticket-list"></div>
     </div>
   `;
   let filtered = ISSUES.slice().sort((a,b)=> new Date(b.openedAt)-new Date(a.openedAt));
   if(listFilter!=='all') filtered = filtered.filter(i=>i.status===listFilter);
+  if(adminBranchFilter!=='all') filtered = filtered.filter(i=>i.branch===adminBranchFilter);
   renderTicketGrid('admin-ticket-list', filtered, 'view');
 
   const ctx = document.getElementById('admin-chart');
@@ -458,6 +468,11 @@ function renderAdmin(){
       scales:{y:{beginAtZero:true, ticks:{precision:0}}, x:{grid:{display:false}}}
     }
   });
+}
+
+function setAdminBranchFilter(value){
+  adminBranchFilter = value;
+  renderMain();
 }
 
 async function renderAdminVisits(){
@@ -494,6 +509,28 @@ async function renderAdminVisits(){
           </div>
         `).join('') || '<div class="empty-state">No branch visits logged yet.</div>'}
       </div>
+    </div>
+  `;
+}
+
+async function renderAdminAlerts(){
+  const m = document.getElementById('main');
+  await loadNotifications();
+  const failed = NOTIFICATIONS.filter(n=>n.status==='failed').length;
+  const sent = NOTIFICATIONS.filter(n=>n.status==='sent').length;
+  const queued = NOTIFICATIONS.filter(n=>n.status==='queued').length;
+  m.innerHTML = `
+    <div class="page-head">
+      <div><h1>Notification alerts</h1><p>WhatsApp delivery status for issue notifications</p></div>
+    </div>
+    <div class="stat-grid">
+      <div class="stat-card green"><div class="lbl">Sent</div><div class="val">${sent}</div></div>
+      <div class="stat-card red"><div class="lbl">Failed</div><div class="val">${failed}</div></div>
+      <div class="stat-card amber"><div class="lbl">Queued</div><div class="val">${queued}</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Latest notification attempts</div>
+      <div class="bars">${renderNotificationRows(NOTIFICATIONS)}</div>
     </div>
   `;
 }
@@ -666,7 +703,7 @@ function renderCoordinator(){
 }
 
 function renderNotificationRows(list){
-  if(!list.length) return '<div class="empty-state">No force notifications yet.</div>';
+  if(!list.length) return '<div class="empty-state">No notifications yet.</div>';
   return list.map(n => `
     <div class="bar-row" style="border-bottom:1px solid var(--line);padding-bottom:10px;">
       <div class="bar-top">
