@@ -23,6 +23,7 @@ let ISSUES = [];
 let USERS = [];
 let AUDIT_LOGS = [];
 let NOTIFICATIONS = [];
+let VISITS = [];
 let sidebarView = 'overview';
 let passwordChangeRequired = false;
 let notificationTimer = null;
@@ -70,6 +71,18 @@ async function loadNotifications(){
   }catch(e){
     console.error(e);
     NOTIFICATIONS = [];
+  }
+}
+async function loadVisits(){
+  if(!currentUser || !['admin','ceo','coordinator'].includes(currentUser.role)){
+    VISITS = [];
+    return;
+  }
+  try{
+    VISITS = await apiFetch('/visits');
+  }catch(e){
+    console.error(e);
+    VISITS = [];
   }
 }
 function normalizeIssue(i){
@@ -187,6 +200,7 @@ async function enterApp(){
   const u = currentUser;
   await loadIssues();
   await loadNotifications();
+  await loadVisits();
   startNotificationPolling();
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
@@ -233,6 +247,7 @@ function renderSidebar(){
       {key:'all-open', label:'Open', count: ISSUES.filter(i=>i.status==='open').length},
       {key:'all-verified', label:'Verified', count: ISSUES.filter(i=>i.status==='verified').length},
       {key:'all-closed', label:'Closed', count: ISSUES.filter(i=>i.status==='closed').length},
+      {key:'visits', label:'Visits', count: VISITS.length},
       {key:'users', label:'Users', count: ''},
       {key:'audit', label:'Audit log', count: ''},
     ];
@@ -380,6 +395,7 @@ function renderPerformanceDashboard(){
 function renderAdmin(){
   if(sidebarView==='users') return renderAdminUsers();
   if(sidebarView==='audit') return renderAdminAudit();
+  if(sidebarView==='visits') return renderAdminVisits();
   const m = document.getElementById('main');
   const total = ISSUES.length;
   const open = ISSUES.filter(i=>i.status==='open').length;
@@ -442,6 +458,44 @@ function renderAdmin(){
       scales:{y:{beginAtZero:true, ticks:{precision:0}}, x:{grid:{display:false}}}
     }
   });
+}
+
+async function renderAdminVisits(){
+  const m = document.getElementById('main');
+  await loadVisits();
+  const branchCounts = BRANCHES.map(b => ({
+    ...b,
+    count: VISITS.filter(v=>v.branch_code===b.code).length,
+    last: VISITS.find(v=>v.branch_code===b.code)
+  }));
+  m.innerHTML = `
+    <div class="page-head">
+      <div><h1>Branch visit tracking</h1><p>Maintenance team attendance by branch and visit time</p></div>
+    </div>
+    <div class="stat-grid">
+      ${branchCounts.map(b=>`
+        <div class="stat-card">
+          <div class="lbl">${escapeHtml(b.name)}</div>
+          <div class="val">${b.count}</div>
+          <small>${b.last ? 'Last: '+fmtDateTime(b.last.visited_at) : 'No visits logged'}</small>
+        </div>
+      `).join('')}
+    </div>
+    <div class="panel">
+      <div class="panel-title">Latest visits</div>
+      <div class="bars">
+        ${VISITS.map(v=>`
+          <div class="bar-row" style="border-bottom:1px solid var(--line);padding-bottom:10px;">
+            <div class="bar-top">
+              <span class="bname">${escapeHtml(branchName(v.branch_code))} · ${escapeHtml(v.user_name || v.user_id)}</span>
+              <span class="bpct">${fmtDateTime(v.visited_at)}</span>
+            </div>
+            <div class="desc">${escapeHtml(v.note || 'Visit logged')}${v.latitude && v.longitude ? ` · GPS: ${Number(v.latitude).toFixed(4)}, ${Number(v.longitude).toFixed(4)}` : ''}</div>
+          </div>
+        `).join('') || '<div class="empty-state">No branch visits logged yet.</div>'}
+      </div>
+    </div>
+  `;
 }
 
 async function renderAdminUsers(){
@@ -589,6 +643,7 @@ function renderCoordinator(){
   m.innerHTML = `
     <div class="page-head">
       <div><h1>${branchLabel} \u2014 Maintenance Team${u.isHead?' <span class="head-badge">Head of Maintenance Department</span>':''}</h1><p>Track open issues and mark them resolved with proof</p></div>
+      <div class="actions-row"><button class="btn btn-fill" onclick="openVisitModal()">+ Log visit</button></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card red"><div class="lbl">Open issues</div><div class="val">${st.verified}</div></div>
@@ -898,6 +953,52 @@ async function submitPhone(id){
     closeModal();
     renderAdminUsers();
   }catch(e){ err.textContent = e.message || 'Could not save phone.'; }
+}
+
+function getBrowserLocation(){
+  return new Promise(resolve => {
+    if(!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy:true, timeout:5000, maximumAge:60000 }
+    );
+  });
+}
+
+function openVisitModal(){
+  const routes = (currentUser.routes || []).map(code => `<option value="${code}">${branchName(code)}</option>`).join('');
+  showModal(`
+    <div class="modal-head"><h3>Log branch visit</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">Record your branch visit time for admin tracking.</p>
+    <div class="field"><label>Branch / location</label><select id="f-visit-branch">${routes}</select></div>
+    <div class="field"><label>Visit note</label><textarea id="f-visit-note" placeholder="e.g. Checked freezer issue, met branch captain"></textarea></div>
+    <div id="visit-error" style="color:var(--red-dark);font-size:12.5px;min-height:16px;font-weight:500;"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitVisit()">Save visit</button>
+    </div>
+  `);
+}
+async function submitVisit(){
+  const err = document.getElementById('visit-error');
+  const saveBtn = document.querySelector('.modal-actions .btn-fill');
+  const payload = {
+    branchCode: document.getElementById('f-visit-branch').value,
+    note: document.getElementById('f-visit-note').value.trim()
+  };
+  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
+  try{
+    const loc = await getBrowserLocation();
+    if(loc) Object.assign(payload, loc);
+    await apiFetch('/visits', { method:'POST', body: JSON.stringify(payload) });
+    await loadVisits();
+    closeModal();
+    renderSidebar(); renderMain();
+  }catch(e){
+    err.textContent = e.message || 'Could not save visit.';
+    if(saveBtn){ saveBtn.textContent='Save visit'; saveBtn.disabled=false; }
+  }
 }
 
 function openIssueModal(isOld){

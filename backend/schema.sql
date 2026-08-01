@@ -125,3 +125,17 @@ CREATE TABLE IF NOT EXISTS notification_logs (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_issue ON notification_logs(issue_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user  ON notification_logs(user_id);
+
+CREATE TABLE IF NOT EXISTS visit_logs (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE SET NULL,
+  user_name    TEXT NOT NULL,
+  branch_code  TEXT NOT NULL REFERENCES branches(code),
+  note         TEXT,
+  latitude     NUMERIC,
+  longitude    NUMERIC,
+  visited_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_visits_branch ON visit_logs(branch_code, visited_at DESC);
+CREATE INDEX IF NOT EXISTS idx_visits_user   ON visit_logs(user_id, visited_at DESC);
