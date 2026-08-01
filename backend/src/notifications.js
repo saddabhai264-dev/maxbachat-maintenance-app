@@ -11,6 +11,13 @@ async function sendViaGreenApi(phone, message) {
   if (!instanceId || !token) throw new Error('GREEN_API_INSTANCE_ID or GREEN_API_TOKEN is not set');
   if (!number) throw new Error('Phone number is missing');
 
+  const stateUrl = `https://api.green-api.com/waInstance${instanceId}/getStateInstance/${token}`;
+  const stateResponse = await fetch(stateUrl);
+  const state = stateResponse.ok ? await stateResponse.json() : null;
+  if (!stateResponse.ok || state.stateInstance !== 'authorized') {
+    throw new Error(`Green API instance state is ${state && state.stateInstance ? state.stateInstance : 'unavailable'}`);
+  }
+
   const url = `https://api.green-api.com/waInstance${instanceId}/sendMessage/${token}`;
   return fetch(url, {
     method: 'POST',
@@ -55,9 +62,18 @@ async function dispatchNotification({ issueId, userId, phone, eventType, message
       return;
     }
 
+    let responseError = null;
+    if (response && !response.ok) {
+      try {
+        responseError = (await response.text()).slice(0, 500);
+      } catch (e) {
+        responseError = `HTTP ${response.status}`;
+      }
+    }
+
     await pool.query(
       'UPDATE notification_logs SET status=$1, error=$2 WHERE id=$3',
-      [response.ok ? 'sent' : 'failed', response.ok ? null : `HTTP ${response.status}`, logId]
+      [response.ok ? 'sent' : 'failed', response.ok ? null : responseError || `HTTP ${response.status}`, logId]
     );
   } catch (e) {
     console.error('Notification failed:', e);
