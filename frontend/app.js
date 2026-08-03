@@ -118,6 +118,17 @@ function fmtDateTime(d){
   const dt = new Date(d);
   return dt.toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 }
+function downloadBlob(filename, type, content){
+  const blob = new Blob([content], {type});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
 
 /* ===================== MEDIA UPLOAD (direct to Spaces via presigned URL) ===================== */
 function mediaTypeFor(file){
@@ -431,6 +442,7 @@ function renderAdmin(){
   m.innerHTML = `
     <div class="page-head">
       <div><h1>Head office overview</h1><p>Maintenance performance across all branches and locations</p></div>
+      <div class="actions-row"><button class="btn btn-fill" onclick="openReportExportModal()">Export report</button></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="lbl">Total issues logged</div><div class="val">${total}</div></div>
@@ -490,6 +502,125 @@ function renderAdmin(){
 function setAdminBranchFilter(value){
   adminBranchFilter = value;
   renderMain();
+}
+
+function issueResolutionText(i){
+  if(i.status!=='closed' || !i.closedAt) return i.status==='open' ? 'Pending verification' : 'Pending closure';
+  const days = daysBetween(i.openedAt, i.closedAt);
+  return days === null ? 'Closed' : days.toFixed(1) + ' days';
+}
+function reportDocumentHtml(){
+  const total = ISSUES.length;
+  const closed = ISSUES.filter(i=>i.status==='closed').length;
+  const open = ISSUES.filter(i=>i.status==='open').length;
+  const verified = ISSUES.filter(i=>i.status==='verified').length;
+  const branchRows = BRANCHES.map(b=>{
+    const list = ISSUES.filter(i=>i.branch===b.code);
+    const closedList = list.filter(i=>i.status==='closed');
+    const avgDays = avg(closedList.map(i=>daysBetween(i.openedAt, i.closedAt)));
+    return `<tr><td>${escapeHtml(b.name)}</td><td>${list.length}</td><td>${list.filter(i=>i.status==='open').length}</td><td>${list.filter(i=>i.status==='verified').length}</td><td>${closedList.length}</td><td>${avgDays===null?'N/A':avgDays.toFixed(1)+' days'}</td></tr>`;
+  }).join('');
+  const issueRows = ISSUES.slice().sort((a,b)=>new Date(b.openedAt)-new Date(a.openedAt)).map(i=>{
+    const img = i.openProofMedia && i.openProofMedia.type==='image' ? `<img class="report-photo" src="${i.openProofMedia.dataUrl}" alt="proof">` : '';
+    return `<tr>
+      <td>${escapeHtml(i.id)}</td>
+      <td>${escapeHtml(branchName(i.branch))}</td>
+      <td>${escapeHtml(i.title)}<br><small>${escapeHtml(i.category || '')}</small></td>
+      <td>${escapeHtml(i.status)}</td>
+      <td>${fmtDateTime(i.openedAt)}</td>
+      <td>${i.closedAt ? fmtDateTime(i.closedAt) : '-'}</td>
+      <td>${issueResolutionText(i)}</td>
+      <td>${escapeHtml(i.openedByName || '')}</td>
+      <td>${img}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="report-page" id="report-page">
+      <h1 class="report-title">MAXBACHAT Maintenance Report</h1>
+      <div class="report-sub">Generated: ${fmtDateTime(new Date())} · Branch-wise issue summary and proof photos</div>
+      <div class="report-summary">
+        <div class="report-metric">Total issues<b>${total}</b></div>
+        <div class="report-metric">Open<b>${open}</b></div>
+        <div class="report-metric">Pending closure<b>${verified}</b></div>
+        <div class="report-metric">Closed<b>${closed}</b></div>
+      </div>
+      <div class="report-section">
+        <h4>Branch summary</h4>
+        <table class="report-table"><thead><tr><th>Branch</th><th>Opened</th><th>Open</th><th>Pending closure</th><th>Closed</th><th>Avg close time</th></tr></thead><tbody>${branchRows}</tbody></table>
+      </div>
+      <div class="report-section">
+        <h4>Issue details</h4>
+        <table class="report-table"><thead><tr><th>ID</th><th>Branch</th><th>Issue</th><th>Status</th><th>Opened</th><th>Closed</th><th>Resolve time</th><th>Opened by</th><th>Photo</th></tr></thead><tbody>${issueRows || '<tr><td colspan="9">No issues logged.</td></tr>'}</tbody></table>
+      </div>
+    </div>
+  `;
+}
+function openReportExportModal(){
+  showModal(`
+    <div class="modal-head"><h3>Export maintenance report</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">Preview the report, then download in the format you need for boss/management sharing.</p>
+    <div class="actions-row">
+      <button class="btn btn-fill" onclick="printReportPdf()">PDF / Print</button>
+      <button class="btn" onclick="downloadReportWord()">Word</button>
+      <button class="btn" onclick="downloadReportExcel()">Excel</button>
+      <button class="btn" onclick="downloadReportPng()">PNG</button>
+    </div>
+    <div class="report-preview">${reportDocumentHtml()}</div>
+  `, {wide:true});
+}
+function fullReportHtml(){
+  return `<!doctype html><html><head><meta charset="utf-8"><title>MAXBACHAT Maintenance Report</title><style>${reportCss()}</style></head><body>${reportDocumentHtml()}</body></html>`;
+}
+function reportCss(){
+  return `.report-page{background:#fff;color:#1C1B1A;padding:24px;font-family:Arial,sans-serif}.report-title{font-size:24px;font-weight:800;color:#D6231C;margin:0}.report-sub{font-size:12px;color:#57544F;margin:5px 0 18px}.report-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}.report-metric{border:1px solid #E7E1D8;border-radius:8px;padding:10px}.report-metric b{display:block;font-size:22px;margin-top:4px}.report-section{margin-top:18px}.report-section h4{font-size:15px;margin:0 0 8px;color:#1C1B1A}.report-table{width:100%;border-collapse:collapse;font-size:11px}.report-table th,.report-table td{border:1px solid #E7E1D8;padding:7px;text-align:left;vertical-align:top}.report-table th{background:#FBFAF7;color:#57544F;text-transform:uppercase;font-size:10px}.report-photo{width:82px;height:62px;object-fit:cover;border-radius:6px;border:1px solid #E7E1D8}`;
+}
+function printReportPdf(){
+  const win = window.open('', '_blank');
+  win.document.write(fullReportHtml());
+  win.document.close();
+  win.focus();
+  setTimeout(()=>win.print(), 300);
+}
+function downloadReportWord(){
+  downloadBlob('maxbachat-maintenance-report.doc', 'application/msword', fullReportHtml());
+}
+function downloadReportExcel(){
+  downloadBlob('maxbachat-maintenance-report.xls', 'application/vnd.ms-excel', fullReportHtml());
+}
+async function downloadReportPng(){
+  const node = document.getElementById('report-page');
+  if(!node) return;
+  const clone = node.cloneNode(true);
+  const wrapper = document.createElement('div');
+  wrapper.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+  const style = document.createElement('style');
+  style.textContent = reportCss();
+  wrapper.appendChild(style);
+  wrapper.appendChild(clone);
+  const width = Math.max(980, node.scrollWidth);
+  const height = Math.max(1200, node.scrollHeight);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(wrapper)}</foreignObject></svg>`;
+  const img = new Image();
+  const url = URL.createObjectURL(new Blob([svg], {type:'image/svg+xml;charset=utf-8'}));
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    const a = document.createElement('a');
+    a.download = 'maxbachat-maintenance-report.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    alert('PNG export failed. Please use PDF / Print or Word export.');
+  };
+  img.src = url;
 }
 
 async function renderAdminVisits(){
@@ -846,7 +977,9 @@ function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||
 /* ===================== MODALS ===================== */
 function showModal(html, opts={}){
   passwordChangeRequired = !!opts.required;
-  document.getElementById('modal-box').innerHTML = html;
+  const box = document.getElementById('modal-box');
+  box.classList.toggle('wide', !!opts.wide);
+  box.innerHTML = html;
   document.getElementById('modal-backdrop').classList.add('show');
 }
 function closeModal(){
