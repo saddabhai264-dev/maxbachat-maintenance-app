@@ -37,9 +37,16 @@ async function apiFetch(path, opts={}){
   let data = null;
   try{ data = await res.json(); }catch(e){ /* no body */ }
   if(!res.ok){
-    throw new Error((data && data.error) || 'Request failed');
+    const err = new Error((data && data.error) || 'Request failed');
+    err.status = res.status;
+    throw err;
   }
   return data;
+}
+
+function isSessionError(e){
+  const msg = String(e && e.message || '');
+  return e && (e.status === 401 || msg.includes('Invalid or expired session') || msg.includes('Missing token'));
 }
 
 /* ===================== DATA ===================== */
@@ -49,6 +56,7 @@ async function loadIssues(){
     ISSUES = raw.map(normalizeIssue);
   }catch(e){
     console.error(e);
+    if(isSessionError(e)) throw e;
     ISSUES = [];
     if(String(e.message || '').includes('Password change required')) {
       currentUser.mustChangePassword = true;
@@ -199,9 +207,18 @@ function setSession(token, user){
 }
 async function enterApp(){
   const u = currentUser;
-  await loadIssues();
-  await loadNotifications();
-  await loadVisits();
+  try{
+    await loadIssues();
+    await loadNotifications();
+    await loadVisits();
+  }catch(e){
+    if(isSessionError(e)){
+      doLogout();
+      document.getElementById('login-error').textContent = 'Session expired. Please log in again.';
+      return;
+    }
+    throw e;
+  }
   startNotificationPolling();
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
