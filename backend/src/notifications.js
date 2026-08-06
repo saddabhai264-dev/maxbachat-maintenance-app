@@ -1,4 +1,17 @@
 const pool = require('./db');
+const webpush = require('web-push');
+
+function configureWebPush() {
+  const publicKey = process.env.VAPID_PUBLIC_KEY;
+  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  if (!publicKey || !privateKey) return false;
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || 'mailto:admin@maxbachat.local',
+    publicKey,
+    privateKey
+  );
+  return true;
+}
 
 function normalizeWhatsappNumber(phone) {
   return String(phone || '').replace(/[^\d]/g, '');
@@ -91,6 +104,39 @@ async function notifyUsers(users, issueId, eventType, message) {
     eventType,
     message
   })));
+  await sendPushToUsers(users, { issueId, eventType, message });
+}
+
+async function sendPushToUsers(users, payload) {
+  if (!configureWebPush()) return;
+  const ids = [...new Set((users || []).map(u => u && u.id).filter(Boolean))];
+  if (!ids.length) return;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, user_id, subscription FROM push_subscriptions WHERE user_id = ANY($1)`,
+      [ids]
+    );
+    await Promise.all(rows.map(async row => {
+      try {
+        await webpush.sendNotification(row.subscription, JSON.stringify({
+          title: 'MAXBACHAT Maintenance Alert',
+          body: payload.message,
+          issueId: payload.issueId,
+          eventType: payload.eventType,
+          url: '/'
+        }));
+      } catch (e) {
+        if (e.statusCode === 404 || e.statusCode === 410) {
+          await pool.query('DELETE FROM push_subscriptions WHERE id=$1', [row.id]);
+        } else {
+          console.error('Push notification failed:', e.message);
+        }
+      }
+    }));
+  } catch (e) {
+    console.error('Push notification lookup failed:', e);
+  }
 }
 
 async function usersForIssueBranch(branchCode, roles = []) {

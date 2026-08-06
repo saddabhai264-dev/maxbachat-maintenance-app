@@ -9,6 +9,7 @@ const authRoutes = require('./src/routes/auth');
 const issueRoutes = require('./src/routes/issues');
 const mediaRoutes = require('./src/routes/media');
 const notificationRoutes = require('./src/routes/notifications');
+const pushRoutes = require('./src/routes/push');
 const userRoutes = require('./src/routes/users');
 const visitRoutes = require('./src/routes/visits');
 const pool = require('./src/db');
@@ -43,6 +44,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/issues', issueRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/push', pushRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/visits', visitRoutes);
 

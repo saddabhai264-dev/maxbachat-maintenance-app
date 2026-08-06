@@ -129,6 +129,12 @@ function downloadBlob(filename, type, content){
   a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
+function urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map(char => char.charCodeAt(0)));
+}
 
 /* ===================== MEDIA UPLOAD (direct to Spaces via presigned URL) ===================== */
 function mediaTypeFor(file){
@@ -828,7 +834,10 @@ function renderCoordinator(){
   m.innerHTML = `
     <div class="page-head">
       <div><h1>${branchLabel} \u2014 Maintenance Team${u.isHead?' <span class="head-badge">Head of Maintenance Department</span>':''}</h1><p>Track open issues and mark them resolved with proof</p></div>
-      <div class="actions-row"><button class="btn btn-fill" onclick="openVisitModal()">+ Log visit</button></div>
+      <div class="actions-row">
+        <button class="btn" onclick="enablePushNotifications()">Enable phone alerts</button>
+        <button class="btn btn-fill" onclick="openVisitModal()">+ Log visit</button>
+      </div>
     </div>
     <div class="stat-grid">
       <div class="stat-card red"><div class="lbl">Open issues</div><div class="val">${st.verified}</div></div>
@@ -1143,6 +1152,34 @@ async function submitPhone(id){
     closeModal();
     renderAdminUsers();
   }catch(e){ err.textContent = e.message || 'Could not save phone.'; }
+}
+
+async function enablePushNotifications(){
+  try{
+    if(!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)){
+      alert('This browser does not support phone alerts. Try Chrome/Edge on Android.');
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if(permission !== 'granted'){
+      alert('Notification permission was not allowed.');
+      return;
+    }
+    const { publicKey } = await apiFetch('/push/public-key');
+    const registration = await navigator.serviceWorker.register('/sw.js');
+    const existing = await registration.pushManager.getSubscription();
+    const subscription = existing || await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey)
+    });
+    await apiFetch('/push/subscribe', {
+      method:'POST',
+      body: JSON.stringify({ subscription })
+    });
+    alert('Phone alerts enabled for this device.');
+  }catch(e){
+    alert(e.message || 'Could not enable phone alerts.');
+  }
 }
 
 function getBrowserLocation(){

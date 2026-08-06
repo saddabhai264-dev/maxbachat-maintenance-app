@@ -139,3 +139,14 @@ CREATE TABLE IF NOT EXISTS visit_logs (
 
 CREATE INDEX IF NOT EXISTS idx_visits_branch ON visit_logs(branch_code, visited_at DESC);
 CREATE INDEX IF NOT EXISTS idx_visits_user   ON visit_logs(user_id, visited_at DESC);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      TEXT REFERENCES users(id) ON DELETE CASCADE,
+  endpoint     TEXT NOT NULL UNIQUE,
+  subscription JSONB NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
