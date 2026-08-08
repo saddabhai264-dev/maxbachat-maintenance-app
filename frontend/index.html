@@ -131,7 +131,7 @@
   .ticket-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;}
   .ticket{position:relative;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px 16px 14px 18px;}
   .ticket::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:3px;background:var(--red);}
-  .ticket.status-verified::before{background:var(--amber);}
+  .ticket.status-verified::before,.ticket.status-pending_review::before{background:var(--amber);}
   .ticket.status-closed::before{background:var(--green);}
   .ticket-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px;}
   .ticket-id{font-family:'Roboto Mono',monospace;font-size:10.5px;color:var(--ink-soft);}
@@ -182,7 +182,7 @@
   .report-page{background:#fff;color:#1C1B1A;padding:24px;font-family:Arial,sans-serif;}
   .report-title{font-size:24px;font-weight:800;color:#D6231C;margin:0;}
   .report-sub{font-size:12px;color:#57544F;margin:5px 0 18px;}
-  .report-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
+  .report-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px;}
   .report-metric{border:1px solid #E7E1D8;border-radius:8px;padding:10px;}
   .report-metric b{display:block;font-size:22px;margin-top:4px;}
   .report-section{margin-top:18px;}

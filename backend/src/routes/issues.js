@@ -3,7 +3,7 @@ const pool = require('../db');
 const { requireAuth, requirePasswordReady } = require('../auth');
 const { publicUrlFor, presignGetUrl } = require('../spaces');
 const { logAudit } = require('../audit');
-const { notifyUsers, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
+const { notifyUsers, usersForIssueBranch, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -54,11 +54,29 @@ async function mediaForClient(media) {
   })));
 }
 
+async function branchReviewers(branchCode) {
+  const local = await usersForIssueBranch(branchCode, ['auditor', 'captain', 'reporter']);
+  const admins = await pool.query(
+    `SELECT id, name, phone, role FROM users WHERE is_active=true AND role='admin'`
+  );
+  return [...local, ...admins.rows].filter((u, index, list) => (
+    u && u.id && list.findIndex(x => x.id === u.id) === index
+  ));
+}
+
+function canFinalReview(user, issue) {
+  if (user.role === 'admin') return true;
+  return ['auditor', 'captain', 'reporter'].includes(user.role) && user.branch === issue.branch_code;
+}
+
 // GET /api/issues  -> scoped by role. Admin/CEO/head see all; branch users see their queue.
 router.get('/', async (req, res) => {
   try {
+    const includeMedia = req.query.media === '1' || req.query.media === 'true';
     const scope = readScope(req.user);
     const { rows: issues } = await pool.query(`SELECT * FROM issues ${scope.sql} ORDER BY opened_at DESC`, scope.params);
+    if (!includeMedia) return res.json(issues.map(i => ({ ...i, media: [] })));
+
     const ids = issues.map(i => i.id);
     let mediaByIssue = {};
     if (ids.length) {
@@ -199,34 +217,148 @@ router.post('/:id/verify', async (req, res) => {
   }
 });
 
-// POST /api/issues/:id/close  -> maintenance team resolves a verified issue, with proof
+// POST /api/issues/:id/deadline -> maintenance team commits a deadline for a verified issue
+router.post('/:id/deadline', async (req, res) => {
+  const u = req.user;
+  if (u.role !== 'coordinator') return res.status(403).json({ error: 'Not allowed' });
+  const { deadlineAt, note } = req.body || {};
+  if (!deadlineAt || Number.isNaN(new Date(deadlineAt).getTime())) {
+    return res.status(400).json({ error: 'Valid deadline is required' });
+  }
+
+  try {
+    const { rows } = await pool.query('SELECT branch_code, status, title, deadline_at FROM issues WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
+    const issue = rows[0];
+    if (!u.routes.includes(issue.branch_code)) return res.status(403).json({ error: 'This issue is not in your queue' });
+    if (!['verified', 'pending_review'].includes(issue.status)) {
+      return res.status(400).json({ error: 'Deadline can only be set for pending maintenance issues' });
+    }
+
+    await pool.query(
+      `UPDATE issues
+       SET deadline_at=$1, deadline_set_by=$2, deadline_set_by_name=$3, deadline_note=$4
+       WHERE id=$5`,
+      [deadlineAt, u.id, u.name, note || null, req.params.id]
+    );
+    await logAudit(u, 'issue_deadline_set', 'issue', req.params.id, {
+      branch: issue.branch_code,
+      deadlineAt
+    });
+    await notifyUsers(
+      await branchReviewers(issue.branch_code),
+      req.params.id,
+      'issue_deadline_set',
+      `MAXBACHAT: Deadline set for issue ${req.params.id} at ${issue.branch_code}: ${new Date(deadlineAt).toLocaleString('en-GB')}. ${issue.title}`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not set deadline' });
+  }
+});
+
+// POST /api/issues/:id/close -> maintenance team submits resolution for final verification
 router.post('/:id/close', async (req, res) => {
   const u = req.user;
   if (u.role !== 'coordinator') return res.status(403).json({ error: 'Not allowed' });
   const { note, media } = req.body || {};
 
   try {
-    const { rows } = await pool.query('SELECT branch_code, status FROM issues WHERE id=$1', [req.params.id]);
+    const { rows } = await pool.query('SELECT branch_code, status, title, deadline_at FROM issues WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
     if (!u.routes.includes(rows[0].branch_code)) return res.status(403).json({ error: 'This issue is not in your queue' });
     if (rows[0].status !== 'verified') return res.status(400).json({ error: 'Issue must be verified before it can be resolved' });
+    if (!rows[0].deadline_at) return res.status(400).json({ error: 'Please set a deadline before submitting for final verification' });
     await pool.query(
-      `UPDATE issues SET status='closed', closed_by=$1, closed_by_name=$2, closed_at=now(), close_proof=$3
+      `UPDATE issues SET status='pending_review', resolved_by=$1, resolved_by_name=$2, resolved_at=now(), close_proof=$3
        WHERE id=$4`,
       [u.id, u.name, note || null, req.params.id]
     );
     await insertMedia(req.params.id, media, 'close');
-    await logAudit(u, 'issue_closed', 'issue', req.params.id, { branch: rows[0].branch_code });
+    await logAudit(u, 'issue_resolution_submitted', 'issue', req.params.id, { branch: rows[0].branch_code });
     await notifyUsers(
-      await forcedMaintenanceRecipients(rows[0].branch_code),
+      await branchReviewers(rows[0].branch_code),
       req.params.id,
-      'issue_closed',
-      `MAXBACHAT: Issue ${req.params.id} has been marked resolved at ${rows[0].branch_code}.`
+      'issue_resolution_submitted',
+      `MAXBACHAT: Issue ${req.params.id} at ${rows[0].branch_code} was submitted as resolved. Please verify before final closure. ${rows[0].title}`
     );
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Could not resolve issue' });
+  }
+});
+
+router.post('/:id/final-verify', async (req, res) => {
+  const u = req.user;
+  const { note } = req.body || {};
+
+  try {
+    const { rows } = await pool.query('SELECT branch_code, status, title FROM issues WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
+    const issue = rows[0];
+    if (!canFinalReview(u, issue)) return res.status(403).json({ error: 'Not allowed' });
+    if (issue.status !== 'pending_review') {
+      return res.status(400).json({ error: 'Issue is not awaiting final verification' });
+    }
+
+    await pool.query(
+      `UPDATE issues
+       SET status='closed', closed_by=$1, closed_by_name=$2, closed_at=now(),
+           final_verified_by=$1, final_verified_by_name=$2, final_verified_at=now(), final_verify_note=$3
+       WHERE id=$4`,
+      [u.id, u.name, note || null, req.params.id]
+    );
+    await logAudit(u, 'issue_final_verified', 'issue', req.params.id, { branch: issue.branch_code });
+    await notifyUsers(
+      await forcedMaintenanceRecipients(issue.branch_code),
+      req.params.id,
+      'issue_final_verified',
+      `MAXBACHAT: Issue ${req.params.id} at ${issue.branch_code} has been finally verified and closed. ${issue.title}`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not final verify issue' });
+  }
+});
+
+router.post('/:id/reject-resolution', async (req, res) => {
+  const u = req.user;
+  const { note } = req.body || {};
+  if (!note || !note.trim()) return res.status(400).json({ error: 'Rejection note is required' });
+
+  try {
+    const { rows } = await pool.query('SELECT branch_code, status, title, auditor_note FROM issues WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
+    const issue = rows[0];
+    if (!canFinalReview(u, issue)) return res.status(403).json({ error: 'Not allowed' });
+    if (issue.status !== 'pending_review') {
+      return res.status(400).json({ error: 'Issue is not awaiting final verification' });
+    }
+
+    const rejectionNote = [
+      issue.auditor_note,
+      `Resolution rejected by ${u.name}: ${note.trim()}`
+    ].filter(Boolean).join('\n');
+    await pool.query(
+      `UPDATE issues
+       SET status='verified', auditor_note=$1, final_verify_note=$2
+       WHERE id=$3`,
+      [rejectionNote, note.trim(), req.params.id]
+    );
+    await logAudit(u, 'issue_resolution_rejected', 'issue', req.params.id, { branch: issue.branch_code });
+    await notifyUsers(
+      await forcedMaintenanceRecipients(issue.branch_code),
+      req.params.id,
+      'issue_resolution_rejected',
+      `MAXBACHAT: Issue ${req.params.id} at ${issue.branch_code} was not approved. Reason: ${note.trim()}`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not reject resolution' });
   }
 });
 

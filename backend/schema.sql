@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS issues (
   title            TEXT NOT NULL,
   category         TEXT NOT NULL,
   description      TEXT NOT NULL,
-  status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','verified','closed')),
+  status           TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','verified','pending_review','closed')),
   is_old           BOOLEAN NOT NULL DEFAULT FALSE,   -- true for backdated/historical entries
   open_proof       TEXT,
   opened_by        TEXT REFERENCES users(id),
@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS issues (
   closed_by_name   TEXT,
   closed_at        TIMESTAMPTZ,
   close_proof      TEXT,
+  deadline_at      TIMESTAMPTZ,
+  deadline_set_by  TEXT REFERENCES users(id),
+  deadline_set_by_name TEXT,
+  deadline_note    TEXT,
+  resolved_by      TEXT REFERENCES users(id),
+  resolved_by_name TEXT,
+  resolved_at      TIMESTAMPTZ,
+  final_verified_by TEXT REFERENCES users(id),
+  final_verified_by_name TEXT,
+  final_verified_at TIMESTAMPTZ,
+  final_verify_note TEXT,
   estimated_cost   NUMERIC,
   approval_status  TEXT NOT NULL DEFAULT 'not_required' CHECK (approval_status IN ('not_required','pending','approved','rejected')),
   approval_required BOOLEAN NOT NULL DEFAULT FALSE,
@@ -74,6 +85,19 @@ ALTER TABLE issues ADD COLUMN IF NOT EXISTS approved_by TEXT REFERENCES users(id
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS approved_by_name TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS approval_note TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_set_by TEXT REFERENCES users(id);
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_set_by_name TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_note TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS resolved_by TEXT REFERENCES users(id);
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS resolved_by_name TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_by TEXT REFERENCES users(id);
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_by_name TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_at TIMESTAMPTZ;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verify_note TEXT;
+ALTER TABLE issues DROP CONSTRAINT IF EXISTS issues_status_check;
+ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK (status IN ('open','verified','pending_review','closed'));
 
 -- Photo / video proof, stored in DigitalOcean Spaces. captured_at / latitude / longitude
 -- are already here and ready for the upcoming "live camera with timestamp + location stamp" feature —

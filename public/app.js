@@ -24,6 +24,7 @@ let USERS = [];
 let AUDIT_LOGS = [];
 let NOTIFICATIONS = [];
 let VISITS = [];
+let REPORT_ISSUES = null;
 let sidebarView = 'overview';
 let adminBranchFilter = 'all';
 let passwordChangeRequired = false;
@@ -63,6 +64,10 @@ async function loadIssues(){
       localStorage.setItem('mb_user', JSON.stringify(currentUser));
     }
   }
+}
+async function loadIssuesWithMedia(){
+  const raw = await apiFetch('/issues?media=1');
+  return raw.map(normalizeIssue);
 }
 async function loadUsers(){
   USERS = currentUser && currentUser.role === 'admin' ? await apiFetch('/users') : [];
@@ -107,7 +112,10 @@ function normalizeIssue(i){
     verifiedByName:i.verified_by_name, verifiedAt:i.verified_at, auditorNote:i.auditor_note,
     closeProof:i.close_proof,
     closeProofMedia: closeMedia ? {type:closeMedia.media_type, dataUrl:closeMedia.url} : null,
-    closedByName:i.closed_by_name, closedAt:i.closed_at
+    closedByName:i.closed_by_name, closedAt:i.closed_at,
+    deadlineAt:i.deadline_at, deadlineSetByName:i.deadline_set_by_name, deadlineNote:i.deadline_note,
+    resolvedByName:i.resolved_by_name, resolvedAt:i.resolved_at,
+    finalVerifiedByName:i.final_verified_by_name, finalVerifiedAt:i.final_verified_at, finalVerifyNote:i.final_verify_note
   };
 }
 function genLocalId(){ return 'tmp-' + Date.now(); }
@@ -178,16 +186,16 @@ async function uploadCompressedPhoto(file){
     image.onerror = reject;
     image.src = URL.createObjectURL(file);
   });
-  const maxSide = 1280;
+  const maxSide = 900;
   const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(img.width * scale));
   canvas.height = Math.max(1, Math.round(img.height * scale));
   canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
   URL.revokeObjectURL(img.src);
-  const blob = await canvasToBlob(canvas, 'image/jpeg', 0.78);
+  const blob = await canvasToBlob(canvas, 'image/jpeg', 0.68);
   if(!blob) throw new Error('Could not prepare photo');
-  if(blob.size > 3*1024*1024) throw new Error('Photo is too large after compression. Please choose a smaller photo.');
+  if(blob.size > 1300*1024) throw new Error('Photo is too large after compression. Please choose a smaller photo.');
   const dataBase64 = await new Promise(resolve => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1]);
@@ -226,8 +234,6 @@ async function enterApp(){
   const u = currentUser;
   try{
     await loadIssues();
-    await loadNotifications();
-    await loadVisits();
   }catch(e){
     if(isSessionError(e)){
       doLogout();
@@ -245,6 +251,14 @@ async function enterApp(){
   sidebarView = u.role==='admin' ? 'overview' : u.role==='captain' ? 'my-issues' : u.role==='auditor' ? 'pending-verify' : u.role==='coordinator' ? 'pending-close' : u.role==='reporter' ? 'my-issues' : 'summary';
   renderSidebar();
   renderMain();
+  loadNotifications().then(() => {
+    renderSidebar();
+    if(sidebarView==='alerts' || sidebarView==='force-alerts') renderMain();
+  });
+  loadVisits().then(() => {
+    renderSidebar();
+    if(sidebarView==='visits') renderMain();
+  });
 }
 function doLogout(){
   currentUser = null; AUTH_TOKEN = null;
@@ -281,6 +295,7 @@ function renderSidebar(){
       {key:'overview', label:'Overview', count: ISSUES.length},
       {key:'all-open', label:'Open', count: ISSUES.filter(i=>i.status==='open').length},
       {key:'all-verified', label:'Verified', count: ISSUES.filter(i=>i.status==='verified').length},
+      {key:'all-review', label:'Final OK', count: ISSUES.filter(i=>i.status==='pending_review').length},
       {key:'all-closed', label:'Closed', count: ISSUES.filter(i=>i.status==='closed').length},
       {key:'visits', label:'Visits', count: VISITS.length},
       {key:'alerts', label:'Alerts', count: NOTIFICATIONS.filter(n=>n.status==='failed').length},
@@ -293,12 +308,14 @@ function renderSidebar(){
       {key:'my-issues', label:'All issues', count: mine.length},
       {key:'my-open', label:'Awaiting verification', count: mine.filter(i=>i.status==='open').length},
       {key:'my-verified', label:'Awaiting closure', count: mine.filter(i=>i.status==='verified').length},
+      {key:'my-review', label:'Awaiting final OK', count: mine.filter(i=>i.status==='pending_review').length},
       {key:'my-closed', label:'Closed', count: mine.filter(i=>i.status==='closed').length},
     ];
   } else if(u.role==='auditor'){
     const mine = ISSUES.filter(i=>i.branch===u.branch);
     items = [
       {key:'pending-verify', label:'Pending verification', count: mine.filter(i=>i.status==='open').length},
+      {key:'pending-final', label:'Final OK needed', count: mine.filter(i=>i.status==='pending_review').length},
       {key:'aud-verified', label:'Verified by me', count: mine.filter(i=>i.status!=='open').length},
       {key:'aud-all', label:'All branch issues', count: mine.length},
     ];
@@ -308,6 +325,7 @@ function renderSidebar(){
     items = [
       {key:'force-alerts', label:'Force alerts', count: forceCount},
       {key:'pending-close', label:'Open issues', count: mine.filter(i=>i.status==='verified').length},
+      {key:'sc-review', label:'Awaiting final OK', count: mine.filter(i=>i.status==='pending_review').length},
       {key:'sc-closed', label:'Resolved', count: mine.filter(i=>i.status==='closed').length},
     ];
     if(u.isHead){ items.push({key:'sc-headview', label:'All branches (Head view)', count: ISSUES.length}); }
@@ -354,7 +372,14 @@ function statsFor(codes){
   const closed = list.filter(i=>i.status==='closed').length;
   const total = list.length;
   const pct = total ? Math.round((closed/total)*100) : 0;
-  return {total, open:list.filter(i=>i.status==='open').length, verified:list.filter(i=>i.status==='verified').length, closed, pct};
+  return {
+    total,
+    open:list.filter(i=>i.status==='open').length,
+    verified:list.filter(i=>i.status==='verified').length,
+    pendingReview:list.filter(i=>i.status==='pending_review').length,
+    closed,
+    pct
+  };
 }
 function daysBetween(start, end){
   if(!start || !end) return null;
@@ -437,12 +462,14 @@ function renderAdmin(){
   const total = ISSUES.length;
   const open = ISSUES.filter(i=>i.status==='open').length;
   const verified = ISSUES.filter(i=>i.status==='verified').length;
+  const pendingReview = ISSUES.filter(i=>i.status==='pending_review').length;
   const closed = ISSUES.filter(i=>i.status==='closed').length;
   const overallPct = total ? Math.round((closed/total)*100) : 0;
 
   let listFilter = 'all';
   if(sidebarView==='all-open') listFilter='open';
   if(sidebarView==='all-verified') listFilter='verified';
+  if(sidebarView==='all-review') listFilter='pending_review';
   if(sidebarView==='all-closed') listFilter='closed';
 
   m.innerHTML = `
@@ -454,6 +481,7 @@ function renderAdmin(){
       <div class="stat-card"><div class="lbl">Total issues logged</div><div class="val">${total}</div></div>
       <div class="stat-card red"><div class="lbl">Open</div><div class="val">${open}</div></div>
       <div class="stat-card amber"><div class="lbl">Verified, pending closure</div><div class="val">${verified}</div></div>
+      <div class="stat-card amber"><div class="lbl">Awaiting final OK</div><div class="val">${pendingReview}</div></div>
       <div class="stat-card green"><div class="lbl">Closed</div><div class="val">${closed} <small>(${overallPct}%)</small></div></div>
     </div>
     <div class="panel">
@@ -511,22 +539,27 @@ function setAdminBranchFilter(value){
 }
 
 function issueResolutionText(i){
-  if(i.status!=='closed' || !i.closedAt) return i.status==='open' ? 'Pending verification' : 'Pending closure';
+  if(i.status!=='closed' || !i.closedAt) {
+    if(i.status==='open') return 'Pending verification';
+    if(i.status==='pending_review') return 'Awaiting final verification';
+    return 'Pending closure';
+  }
   const days = daysBetween(i.openedAt, i.closedAt);
   return days === null ? 'Closed' : days.toFixed(1) + ' days';
 }
-function reportDocumentHtml(){
-  const total = ISSUES.length;
-  const closed = ISSUES.filter(i=>i.status==='closed').length;
-  const open = ISSUES.filter(i=>i.status==='open').length;
-  const verified = ISSUES.filter(i=>i.status==='verified').length;
+function reportDocumentHtml(issues = REPORT_ISSUES || ISSUES){
+  const total = issues.length;
+  const closed = issues.filter(i=>i.status==='closed').length;
+  const open = issues.filter(i=>i.status==='open').length;
+  const verified = issues.filter(i=>i.status==='verified').length;
+  const pendingReview = issues.filter(i=>i.status==='pending_review').length;
   const branchRows = BRANCHES.map(b=>{
-    const list = ISSUES.filter(i=>i.branch===b.code);
+    const list = issues.filter(i=>i.branch===b.code);
     const closedList = list.filter(i=>i.status==='closed');
     const avgDays = avg(closedList.map(i=>daysBetween(i.openedAt, i.closedAt)));
-    return `<tr><td>${escapeHtml(b.name)}</td><td>${list.length}</td><td>${list.filter(i=>i.status==='open').length}</td><td>${list.filter(i=>i.status==='verified').length}</td><td>${closedList.length}</td><td>${avgDays===null?'N/A':avgDays.toFixed(1)+' days'}</td></tr>`;
+    return `<tr><td>${escapeHtml(b.name)}</td><td>${list.length}</td><td>${list.filter(i=>i.status==='open').length}</td><td>${list.filter(i=>i.status==='verified').length}</td><td>${list.filter(i=>i.status==='pending_review').length}</td><td>${closedList.length}</td><td>${avgDays===null?'N/A':avgDays.toFixed(1)+' days'}</td></tr>`;
   }).join('');
-  const issueRows = ISSUES.slice().sort((a,b)=>new Date(b.openedAt)-new Date(a.openedAt)).map(i=>{
+  const issueRows = issues.slice().sort((a,b)=>new Date(b.openedAt)-new Date(a.openedAt)).map(i=>{
     const img = i.openProofMedia && i.openProofMedia.type==='image' ? `<img class="report-photo" src="${i.openProofMedia.dataUrl}" alt="proof">` : '';
     return `<tr>
       <td>${escapeHtml(i.id)}</td>
@@ -548,11 +581,12 @@ function reportDocumentHtml(){
         <div class="report-metric">Total issues<b>${total}</b></div>
         <div class="report-metric">Open<b>${open}</b></div>
         <div class="report-metric">Pending closure<b>${verified}</b></div>
+        <div class="report-metric">Final OK<b>${pendingReview}</b></div>
         <div class="report-metric">Closed<b>${closed}</b></div>
       </div>
       <div class="report-section">
         <h4>Branch summary</h4>
-        <table class="report-table"><thead><tr><th>Branch</th><th>Opened</th><th>Open</th><th>Pending closure</th><th>Closed</th><th>Avg close time</th></tr></thead><tbody>${branchRows}</tbody></table>
+        <table class="report-table"><thead><tr><th>Branch</th><th>Opened</th><th>Open</th><th>Pending closure</th><th>Final OK</th><th>Closed</th><th>Avg close time</th></tr></thead><tbody>${branchRows}</tbody></table>
       </div>
       <div class="report-section">
         <h4>Issue details</h4>
@@ -561,7 +595,17 @@ function reportDocumentHtml(){
     </div>
   `;
 }
-function openReportExportModal(){
+async function openReportExportModal(){
+  showModal(`
+    <div class="modal-head"><h3>Export maintenance report</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">Loading full proof photos for the report...</p>
+    <div class="empty-state">Preparing report preview.</div>
+  `, {wide:true});
+  try{
+    REPORT_ISSUES = await loadIssuesWithMedia();
+  }catch(e){
+    REPORT_ISSUES = ISSUES;
+  }
   showModal(`
     <div class="modal-head"><h3>Export maintenance report</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
     <p class="sub">Preview the report, then download in the format you need for boss/management sharing.</p>
@@ -571,14 +615,14 @@ function openReportExportModal(){
       <button class="btn" onclick="downloadReportExcel()">Excel</button>
       <button class="btn" onclick="downloadReportPng()">PNG</button>
     </div>
-    <div class="report-preview">${reportDocumentHtml()}</div>
+    <div class="report-preview">${reportDocumentHtml(REPORT_ISSUES)}</div>
   `, {wide:true});
 }
 function fullReportHtml(){
-  return `<!doctype html><html><head><meta charset="utf-8"><title>MAXBACHAT Maintenance Report</title><style>${reportCss()}</style></head><body>${reportDocumentHtml()}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>MAXBACHAT Maintenance Report</title><style>${reportCss()}</style></head><body>${reportDocumentHtml(REPORT_ISSUES || ISSUES)}</body></html>`;
 }
 function reportCss(){
-  return `.report-page{background:#fff;color:#1C1B1A;padding:24px;font-family:Arial,sans-serif}.report-title{font-size:24px;font-weight:800;color:#D6231C;margin:0}.report-sub{font-size:12px;color:#57544F;margin:5px 0 18px}.report-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}.report-metric{border:1px solid #E7E1D8;border-radius:8px;padding:10px}.report-metric b{display:block;font-size:22px;margin-top:4px}.report-section{margin-top:18px}.report-section h4{font-size:15px;margin:0 0 8px;color:#1C1B1A}.report-table{width:100%;border-collapse:collapse;font-size:11px}.report-table th,.report-table td{border:1px solid #E7E1D8;padding:7px;text-align:left;vertical-align:top}.report-table th{background:#FBFAF7;color:#57544F;text-transform:uppercase;font-size:10px}.report-photo{width:82px;height:62px;object-fit:cover;border-radius:6px;border:1px solid #E7E1D8}`;
+  return `.report-page{background:#fff;color:#1C1B1A;padding:24px;font-family:Arial,sans-serif}.report-title{font-size:24px;font-weight:800;color:#D6231C;margin:0}.report-sub{font-size:12px;color:#57544F;margin:5px 0 18px}.report-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:18px}.report-metric{border:1px solid #E7E1D8;border-radius:8px;padding:10px}.report-metric b{display:block;font-size:22px;margin-top:4px}.report-section{margin-top:18px}.report-section h4{font-size:15px;margin:0 0 8px;color:#1C1B1A}.report-table{width:100%;border-collapse:collapse;font-size:11px}.report-table th,.report-table td{border:1px solid #E7E1D8;padding:7px;text-align:left;vertical-align:top}.report-table th{background:#FBFAF7;color:#57544F;text-transform:uppercase;font-size:10px}.report-photo{width:82px;height:62px;object-fit:cover;border-radius:6px;border:1px solid #E7E1D8}`;
 }
 function printReportPdf(){
   const win = window.open('', '_blank');
@@ -757,6 +801,7 @@ function renderCaptain(){
   let list = mine;
   if(sidebarView==='my-open') list = mine.filter(i=>i.status==='open');
   if(sidebarView==='my-verified') list = mine.filter(i=>i.status==='verified');
+  if(sidebarView==='my-review') list = mine.filter(i=>i.status==='pending_review');
   if(sidebarView==='my-closed') list = mine.filter(i=>i.status==='closed');
   list = list.slice().sort((a,b)=> new Date(b.openedAt)-new Date(a.openedAt));
 
@@ -772,6 +817,7 @@ function renderCaptain(){
       <div class="stat-card"><div class="lbl">Total logged</div><div class="val">${st.total}</div></div>
       <div class="stat-card red"><div class="lbl">Awaiting verification</div><div class="val">${st.open}</div></div>
       <div class="stat-card amber"><div class="lbl">Awaiting closure</div><div class="val">${st.verified}</div></div>
+      <div class="stat-card amber"><div class="lbl">Awaiting final OK</div><div class="val">${st.pendingReview}</div></div>
       <div class="stat-card green"><div class="lbl">Closed</div><div class="val">${st.closed}</div></div>
     </div>
     <div class="panel">
@@ -788,7 +834,8 @@ function renderAuditor(){
   const m = document.getElementById('main');
   const mine = ISSUES.filter(i=>i.branch===u.branch);
   let list;
-  if(sidebarView==='aud-verified') list = mine.filter(i=>i.status!=='open');
+  if(sidebarView==='pending-final') list = mine.filter(i=>i.status==='pending_review');
+  else if(sidebarView==='aud-verified') list = mine.filter(i=>i.status!=='open');
   else if(sidebarView==='aud-all') list = mine;
   else list = mine.filter(i=>i.status==='open');
   list = list.slice().sort((a,b)=> new Date(b.openedAt)-new Date(a.openedAt));
@@ -801,14 +848,15 @@ function renderAuditor(){
     <div class="stat-grid">
       <div class="stat-card red"><div class="lbl">Pending verification</div><div class="val">${st.open}</div></div>
       <div class="stat-card amber"><div class="lbl">Verified, pending closure</div><div class="val">${st.verified}</div></div>
+      <div class="stat-card amber"><div class="lbl">Awaiting final OK</div><div class="val">${st.pendingReview}</div></div>
       <div class="stat-card green"><div class="lbl">Closed</div><div class="val">${st.closed}</div></div>
     </div>
     <div class="panel">
-      <div class="panel-title">${sidebarView==='pending-verify' ? 'Awaiting your verification' : 'Branch issues'}</div>
+      <div class="panel-title">${sidebarView==='pending-verify' ? 'Awaiting your verification' : sidebarView==='pending-final' ? 'Awaiting final verification' : 'Branch issues'}</div>
       <div class="ticket-grid" id="aud-ticket-list"></div>
     </div>
   `;
-  renderTicketGrid('aud-ticket-list', list, sidebarView==='pending-verify' ? 'verify' : 'view');
+  renderTicketGrid('aud-ticket-list', list, sidebarView==='pending-verify' ? 'verify' : sidebarView==='pending-final' ? 'final' : 'view');
 }
 
 /* ---------- COORDINATOR (Maintenance Team) ---------- */
@@ -825,6 +873,7 @@ function renderCoordinator(){
   } else {
     const mine = ISSUES.filter(i=>u.routes.includes(i.branch));
     if(sidebarView==='sc-closed') list = mine.filter(i=>i.status==='closed');
+    else if(sidebarView==='sc-review') list = mine.filter(i=>i.status==='pending_review');
     else list = mine.filter(i=>i.status==='verified');
     branchLabel = u.routes.map(c=>branchName(c)).join(' + ');
   }
@@ -841,6 +890,7 @@ function renderCoordinator(){
     </div>
     <div class="stat-grid">
       <div class="stat-card red"><div class="lbl">Open issues</div><div class="val">${st.verified}</div></div>
+      <div class="stat-card amber"><div class="lbl">Awaiting final OK</div><div class="val">${st.pendingReview}</div></div>
       <div class="stat-card green"><div class="lbl">Resolved</div><div class="val">${st.closed}</div></div>
     </div>
     ${sidebarView==='force-alerts' ? `
@@ -852,7 +902,7 @@ function renderCoordinator(){
       </div>
     ` : ''}
     <div class="panel">
-      <div class="panel-title">${sidebarView==='pending-close' ? 'Open issues \u2014 ready to resolve' : sidebarView==='sc-headview' ? 'All branches, all issues' : sidebarView==='force-alerts' ? 'Related branch issues' : 'Resolved issues'}</div>
+      <div class="panel-title">${sidebarView==='pending-close' ? 'Open issues \u2014 ready to resolve' : sidebarView==='sc-review' ? 'Submitted, awaiting final OK' : sidebarView==='sc-headview' ? 'All branches, all issues' : sidebarView==='force-alerts' ? 'Related branch issues' : 'Resolved issues'}</div>
       <div class="ticket-grid" id="sc-ticket-list"></div>
     </div>
   `;
@@ -890,6 +940,7 @@ function renderReporter(){
     <div class="stat-grid">
       <div class="stat-card"><div class="lbl">Total logged</div><div class="val">${st.total}</div></div>
       <div class="stat-card amber"><div class="lbl">Pending resolution</div><div class="val">${st.verified}</div></div>
+      <div class="stat-card amber"><div class="lbl">Awaiting final OK</div><div class="val">${st.pendingReview}</div></div>
       <div class="stat-card green"><div class="lbl">Resolved</div><div class="val">${st.closed}</div></div>
     </div>
     <div class="panel">
@@ -906,6 +957,7 @@ function renderCEO(){
   const total = ISSUES.length;
   const open = ISSUES.filter(i=>i.status==='open').length;
   const verified = ISSUES.filter(i=>i.status==='verified').length;
+  const pendingReview = ISSUES.filter(i=>i.status==='pending_review').length;
   const closed = ISSUES.filter(i=>i.status==='closed').length;
   const pct = total ? Math.round((closed/total)*100) : 0;
 
@@ -915,7 +967,7 @@ function renderCEO(){
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="lbl">Total issues logged</div><div class="val">${total}</div></div>
-      <div class="stat-card red"><div class="lbl">Awaiting action</div><div class="val">${open+verified}</div></div>
+      <div class="stat-card red"><div class="lbl">Awaiting action</div><div class="val">${open+verified+pendingReview}</div></div>
       <div class="stat-card green"><div class="lbl">Resolved</div><div class="val">${closed} <small>(${pct}%)</small></div></div>
     </div>
     <div class="panel">
@@ -949,22 +1001,41 @@ function mediaBlock(media, label){
   return `<div class="proof-media"><div class="proof-media-label">${label}</div><video src="${media.dataUrl}" controls preload="metadata"></video></div>`;
 }
 function ticketCard(i, mode){
-  const badge = i.status==='open' ? '<span class="badge open">Open</span>' : i.status==='verified' ? '<span class="badge verified">Verified</span>' : '<span class="badge closed">Closed</span>';
+  const badge = i.status==='open'
+    ? '<span class="badge open">Open</span>'
+    : i.status==='verified'
+      ? '<span class="badge verified">Verified</span>'
+      : i.status==='pending_review'
+        ? '<span class="badge verified">Final OK</span>'
+        : '<span class="badge closed">Closed</span>';
+  const isOverdue = i.deadlineAt && i.status !== 'closed' && new Date(i.deadlineAt) < new Date();
   let meta = `<div class="meta-line">
     <span>Opened by <b>${i.openedByName}</b> \u00b7 ${fmtDate(i.openedAt)}${i.branch ? ' \u00b7 '+i.branch : ''}</span>
     ${i.verifiedByName ? `<span>Verified by <b>${i.verifiedByName}</b> \u00b7 ${fmtDate(i.verifiedAt)}</span>` : ''}
-    ${i.closedByName ? `<span>Closed by <b>${i.closedByName}</b> \u00b7 ${fmtDate(i.closedAt)}</span>` : ''}
+    ${i.deadlineAt ? `<span>Deadline <b>${fmtDateTime(i.deadlineAt)}</b>${isOverdue ? ' \u00b7 OVERDUE' : ''}${i.deadlineSetByName ? ' \u00b7 set by '+escapeHtml(i.deadlineSetByName) : ''}</span>` : ''}
+    ${i.resolvedByName ? `<span>Submitted resolved by <b>${i.resolvedByName}</b> \u00b7 ${fmtDate(i.resolvedAt)}</span>` : ''}
+    ${i.closedByName ? `<span>Final closed by <b>${i.closedByName}</b> \u00b7 ${fmtDate(i.closedAt)}</span>` : ''}
   </div>`;
   let proofs = '';
   if(i.openProof) proofs += `<div class="proof-note"><b>Opening proof:</b> ${escapeHtml(i.openProof)}</div>`;
   proofs += mediaBlock(i.openProofMedia, 'Opening photo / video');
   if(i.auditorNote) proofs += `<div class="proof-note"><b>Auditor note:</b> ${escapeHtml(i.auditorNote)}</div>`;
+  if(i.deadlineNote) proofs += `<div class="proof-note"><b>Deadline note:</b> ${escapeHtml(i.deadlineNote)}</div>`;
   if(i.closeProof) proofs += `<div class="proof-note"><b>Closure proof:</b> ${escapeHtml(i.closeProof)}</div>`;
   proofs += mediaBlock(i.closeProofMedia, 'Closure photo / video');
+  if(i.finalVerifyNote) proofs += `<div class="proof-note"><b>Final verification note:</b> ${escapeHtml(i.finalVerifyNote)}</div>`;
 
   let cta = '';
   if(mode==='verify' && i.status==='open') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openVerifyModal('${i.id}')">Verify issue</button></div>`;
-  if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Mark as resolved</button></div>`;
+  if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openDeadlineModal('${i.id}')">${i.deadlineAt ? 'Update deadline' : 'Set deadline'}</button><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Submit for final OK</button></div>`;
+  const canFinal = i.status === 'pending_review' && currentUser && (
+    currentUser.role === 'admin' ||
+    (['auditor','captain','reporter'].includes(currentUser.role) && currentUser.branch === i.branch)
+  );
+  if((mode==='final' || canFinal) && canFinal){
+    const finalButtons = `<button class="btn-ghost-sm" style="width:100%" onclick="openFinalVerifyModal('${i.id}')">Approve final closure</button><button class="btn-ghost-sm" style="width:100%;color:var(--red-dark);border-color:var(--red-tint);" onclick="openRejectResolutionModal('${i.id}')">Reject / send back</button>`;
+    cta = cta ? cta.replace('</div>', `${finalButtons}</div>`) : `<div class="ticket-cta">${finalButtons}</div>`;
+  }
   const canDelete = currentUser && (
     currentUser.role === 'admin' ||
     (['captain','reporter'].includes(currentUser.role) && i.status==='open' && i.openedBy===currentUser.id)
@@ -1413,7 +1484,7 @@ async function submitDeleteIssue(id){
 function openCloseModal(id){
   const i = ISSUES.find(x=>x.id===id);
   showModal(`
-    <div class="modal-head"><h3>Mark as resolved</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <div class="modal-head"><h3>Submit for final verification</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
     <p class="sub">${escapeHtml(i.title)}</p>
     <div class="field"><label>Resolution proof (description)</label><textarea id="f-cnote2" placeholder="Describe the repair completed as proof of resolution"></textarea></div>
     <div class="field">
@@ -1426,7 +1497,7 @@ function openCloseModal(id){
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-fill" onclick="submitClose('${id}')">Mark as resolved</button>
+      <button class="btn btn-fill" onclick="submitClose('${id}')">Submit for final OK</button>
     </div>
   `);
 }
@@ -1444,7 +1515,96 @@ async function submitClose(id){
     renderSidebar(); renderMain();
   }catch(e){
     alert(e.message || 'Could not resolve this issue.');
-    if(saveBtn){ saveBtn.textContent='Mark as resolved'; saveBtn.disabled=false; }
+    if(saveBtn){ saveBtn.textContent='Submit for final OK'; saveBtn.disabled=false; }
+  }
+}
+
+function openDeadlineModal(id){
+  const i = ISSUES.find(x=>x.id===id);
+  const existing = i && i.deadlineAt ? new Date(i.deadlineAt) : null;
+  const value = existing ? new Date(existing.getTime() - existing.getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+  showModal(`
+    <div class="modal-head"><h3>${i.deadlineAt ? 'Update deadline' : 'Set deadline'}</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">${escapeHtml(i.title)}</p>
+    <div class="field"><label>Commitment date & time</label><input id="f-deadline-at" type="datetime-local" value="${value}"></div>
+    <div class="field"><label>Deadline note</label><textarea id="f-deadline-note" placeholder="e.g. Parts arriving tomorrow, repair before 6 PM">${escapeHtml(i.deadlineNote || '')}</textarea></div>
+    <div class="proof-note">This deadline will be visible to branch/admin and used for overdue tracking.</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitDeadline('${id}')">Save deadline</button>
+    </div>
+  `);
+}
+async function submitDeadline(id){
+  const deadlineAt = document.getElementById('f-deadline-at').value;
+  const note = document.getElementById('f-deadline-note').value.trim();
+  if(!deadlineAt){ alert('Please select a deadline.'); return; }
+  const saveBtn = document.querySelector('.modal-actions .btn-fill');
+  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
+  try{
+    await apiFetch(`/issues/${id}/deadline`, { method:'POST', body: JSON.stringify({ deadlineAt, note }) });
+    await loadIssues();
+    closeModal();
+    renderSidebar(); renderMain();
+  }catch(e){
+    alert(e.message || 'Could not save deadline.');
+    if(saveBtn){ saveBtn.textContent='Save deadline'; saveBtn.disabled=false; }
+  }
+}
+
+function openFinalVerifyModal(id){
+  const i = ISSUES.find(x=>x.id===id);
+  showModal(`
+    <div class="modal-head"><h3>Approve final closure</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">${escapeHtml(i.title)}</p>
+    <div class="proof-note">Only approve after checking the work is actually completed.</div>
+    <div class="field"><label>Final verification note</label><textarea id="f-final-note" placeholder="e.g. Checked on floor, freezer cooling is normal"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitFinalVerify('${id}')">Approve & close</button>
+    </div>
+  `);
+}
+async function submitFinalVerify(id){
+  const note = document.getElementById('f-final-note').value.trim();
+  const saveBtn = document.querySelector('.modal-actions .btn-fill');
+  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
+  try{
+    await apiFetch(`/issues/${id}/final-verify`, { method:'POST', body: JSON.stringify({ note }) });
+    await loadIssues();
+    closeModal();
+    renderSidebar(); renderMain();
+  }catch(e){
+    alert(e.message || 'Could not approve final closure.');
+    if(saveBtn){ saveBtn.textContent='Approve & close'; saveBtn.disabled=false; }
+  }
+}
+
+function openRejectResolutionModal(id){
+  const i = ISSUES.find(x=>x.id===id);
+  showModal(`
+    <div class="modal-head"><h3>Reject resolution</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">${escapeHtml(i.title)}</p>
+    <div class="field"><label>Reason</label><textarea id="f-reject-note" placeholder="What is still not resolved?"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitRejectResolution('${id}')">Send back to maintenance</button>
+    </div>
+  `);
+}
+async function submitRejectResolution(id){
+  const note = document.getElementById('f-reject-note').value.trim();
+  if(!note){ alert('Please add the reason before sending back.'); return; }
+  const saveBtn = document.querySelector('.modal-actions .btn-fill');
+  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
+  try{
+    await apiFetch(`/issues/${id}/reject-resolution`, { method:'POST', body: JSON.stringify({ note }) });
+    await loadIssues();
+    closeModal();
+    renderSidebar(); renderMain();
+  }catch(e){
+    alert(e.message || 'Could not reject resolution.');
+    if(saveBtn){ saveBtn.textContent='Send back to maintenance'; saveBtn.disabled=false; }
   }
 }
 
