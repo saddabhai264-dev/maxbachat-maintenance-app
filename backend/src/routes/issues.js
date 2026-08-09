@@ -91,6 +91,29 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET /api/issues/:id/media -> load proof photos/videos for one issue on demand.
+router.get('/:id/media', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT id, branch_code FROM issues WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
+    const issue = rows[0];
+    const u = req.user;
+    const allowed = canReadAll(u) ||
+      (u.role === 'coordinator' && (u.routes || []).includes(issue.branch_code)) ||
+      (u.branch && u.branch === issue.branch_code);
+    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+
+    const media = await pool.query(
+      'SELECT * FROM issue_media WHERE issue_id=$1 ORDER BY uploaded_at ASC',
+      [req.params.id]
+    );
+    res.json(await mediaForClient(media.rows));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not load proof media' });
+  }
+});
+
 // POST /api/issues  -> captain or reporter opens a new (or backdated/old) issue
 router.post('/', async (req, res) => {
   const u = req.user;

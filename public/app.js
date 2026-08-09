@@ -25,6 +25,7 @@ let AUDIT_LOGS = [];
 let NOTIFICATIONS = [];
 let VISITS = [];
 let REPORT_ISSUES = null;
+let ISSUE_MEDIA_LOADED = new Set();
 let sidebarView = 'overview';
 let adminBranchFilter = 'all';
 let passwordChangeRequired = false;
@@ -55,6 +56,7 @@ async function loadIssues(){
   try{
     const raw = await apiFetch('/issues');
     ISSUES = raw.map(normalizeIssue);
+    ISSUE_MEDIA_LOADED = new Set();
   }catch(e){
     console.error(e);
     if(isSessionError(e)) throw e;
@@ -68,6 +70,17 @@ async function loadIssues(){
 async function loadIssuesWithMedia(){
   const raw = await apiFetch('/issues?media=1');
   return raw.map(normalizeIssue);
+}
+async function loadIssueProofMedia(id){
+  const media = await apiFetch(`/issues/${id}/media`);
+  const issue = ISSUES.find(i=>i.id===id);
+  if(!issue) return;
+  ISSUE_MEDIA_LOADED.add(id);
+  const openMedia = media.find(m=>m.phase==='open');
+  const closeMedia = media.find(m=>m.phase==='close');
+  issue.openProofMedia = openMedia ? {type:openMedia.media_type, dataUrl:openMedia.url} : null;
+  issue.closeProofMedia = closeMedia ? {type:closeMedia.media_type, dataUrl:closeMedia.url} : null;
+  if(!openMedia && !closeMedia) alert('No proof photo / video was uploaded for this issue.');
 }
 async function loadUsers(){
   USERS = currentUser && currentUser.role === 'admin' ? await apiFetch('/users') : [];
@@ -1044,6 +1057,10 @@ function ticketCard(i, mode){
     const finalButtons = `<button class="btn-ghost-sm" style="width:100%" onclick="openFinalVerifyModal('${i.id}')">Approve final closure</button><button class="btn-ghost-sm" style="width:100%;color:var(--red-dark);border-color:var(--red-tint);" onclick="openRejectResolutionModal('${i.id}')">Reject / send back</button>`;
     cta = cta ? cta.replace('</div>', `${finalButtons}</div>`) : `<div class="ticket-cta">${finalButtons}</div>`;
   }
+  if(!ISSUE_MEDIA_LOADED.has(i.id) && !i.openProofMedia && !i.closeProofMedia){
+    const mediaButton = `<button class="btn-ghost-sm" style="width:100%" onclick="viewIssueProofMedia('${i.id}', this)">View proof photos</button>`;
+    cta = cta ? cta.replace('</div>', `${mediaButton}</div>`) : `<div class="ticket-cta">${mediaButton}</div>`;
+  }
   const canDelete = currentUser && (
     currentUser.role === 'admin' ||
     (['captain','reporter'].includes(currentUser.role) && i.status==='open' && i.openedBy===currentUser.id)
@@ -1064,6 +1081,18 @@ function ticketCard(i, mode){
   </div>`;
 }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+async function viewIssueProofMedia(id, btn){
+  if(btn){ btn.textContent = 'Loading proof...'; btn.disabled = true; }
+  try{
+    await loadIssueProofMedia(id);
+    renderSidebar();
+    renderMain();
+  }catch(e){
+    alert(e.message || 'Could not load proof photos.');
+    if(btn){ btn.textContent = 'View proof photos'; btn.disabled = false; }
+  }
+}
 
 /* ===================== MODALS ===================== */
 function showModal(html, opts={}){
