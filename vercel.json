@@ -4,7 +4,8 @@
   "functions": {
     "api/index.js": {
       "includeFiles": "{backend/schema.sql,frontend/**}",
-      "maxDuration": 60
+      "maxDuration": 60,
+      "regions": ["sin1"]
     }
   },
   "outputDirectory": "public",
