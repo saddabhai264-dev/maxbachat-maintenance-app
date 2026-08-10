@@ -177,10 +177,15 @@ async function uploadMediaFile(file){
     alert(`That file is too large (max ${isVideo ? '60MB for video' : '15MB for photos'}). Please choose a smaller file.`);
     return null;
   }
-  const presign = await apiFetch('/media/presign', {
-    method:'POST',
-    body: JSON.stringify({ filename:file.name, contentType:mediaType, size:file.size })
-  });
+  let presign;
+  try{
+    presign = await apiFetch('/media/presign', {
+      method:'POST',
+      body: JSON.stringify({ filename:file.name, contentType:mediaType, size:file.size })
+    });
+  }catch(e){
+    throw new Error(e.message || 'Video upload could not start. Please try a photo as proof or contact admin.');
+  }
   const uploadHeaders = {'Content-Type':mediaType};
   if(presign.acl) uploadHeaders['x-amz-acl'] = presign.acl;
   const putRes = await fetch(presign.uploadUrl, { method:'PUT', headers:uploadHeaders, body:file });
@@ -222,6 +227,8 @@ async function uploadCompressedPhoto(file){
       size: blob.size,
       dataBase64
     })
+  }).catch(e => {
+    throw new Error(e.message || 'Could not upload photo to storage. Please contact admin.');
   });
   return {
     type: uploaded.type || 'image',

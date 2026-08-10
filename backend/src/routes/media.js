@@ -38,8 +38,22 @@ router.post('/presign', async (req, res) => {
       type: contentType.startsWith('video/') ? 'video' : 'image'
     });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Could not prepare upload' });
+    console.error('Media presign failed', {
+      code: e.code,
+      message: e.message,
+      contentType,
+      size,
+      hasEndpoint: Boolean(process.env.SPACES_ENDPOINT),
+      hasRegion: Boolean(process.env.SPACES_REGION),
+      hasBucket: Boolean(process.env.SPACES_BUCKET),
+      hasUrl: Boolean(process.env.SPACES_URL)
+    });
+    const configMissing = e.code === 'STORAGE_CONFIG_MISSING';
+    res.status(500).json({
+      error: configMissing
+        ? 'Upload storage is not configured. Please contact admin.'
+        : 'Could not prepare video upload. Please try a photo, or contact admin if video proof is required.'
+    });
   }
 });
 
@@ -71,8 +85,24 @@ router.post('/upload', async (req, res) => {
       type: 'image'
     });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Could not upload photo' });
+    console.error('Media photo upload failed', {
+      code: e.code,
+      message: e.message,
+      contentType,
+      size,
+      hasEndpoint: Boolean(process.env.SPACES_ENDPOINT),
+      hasRegion: Boolean(process.env.SPACES_REGION),
+      hasKey: Boolean(process.env.SPACES_KEY),
+      hasSecret: Boolean(process.env.SPACES_SECRET),
+      hasBucket: Boolean(process.env.SPACES_BUCKET),
+      hasUrl: Boolean(process.env.SPACES_URL)
+    });
+    const configMissing = e.code === 'STORAGE_CONFIG_MISSING';
+    res.status(500).json({
+      error: configMissing
+        ? 'Upload storage is not configured. Please contact admin.'
+        : 'Could not upload photo to storage. Please contact admin.'
+    });
   }
 });
 
