@@ -1,0 +1,19 @@
+{
+  "name": "MAXBACHAT Maintenance Performance Dashboard",
+  "short_name": "MAXBACHAT",
+  "description": "Maintenance issues, verification, closure, visits, and alerts for MAXBACHAT branches.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FAFAF8",
+  "theme_color": "#D6231C",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -33,6 +33,7 @@ let passwordChangeRequired = false;
 let notificationTimer = null;
 let seenNotificationIds = new Set();
 let notificationPanelOpen = false;
+let installPromptEvent = null;
 
 /* ===================== API HELPER ===================== */
 async function apiFetch(path, opts={}){
@@ -534,6 +535,7 @@ function maybeShowNotificationPrompt(){
     <p>Get assigned issue, due soon, overdue, and closure alerts in this browser.</p>
     <div class="actions-row">
       <button class="btn btn-fill" onclick="allowBrowserNotifications()">Allow Notifications</button>
+      <button class="btn" onclick="installAppFromPrompt()">Install App</button>
       <button class="btn" onclick="dismissNotificationPrompt()">Not Now</button>
     </div>
   `;
@@ -557,6 +559,16 @@ async function allowBrowserNotifications(){
 function dismissNotificationPrompt(){
   localStorage.setItem('mb_notification_prompt', 'dismissed');
   document.getElementById('notify-prompt').classList.remove('show');
+}
+
+async function installAppFromPrompt(){
+  if(!installPromptEvent){
+    alert('Open browser menu and choose Add to Home screen / Install app. Then come back and enable phone alerts.');
+    return;
+  }
+  installPromptEvent.prompt();
+  await installPromptEvent.userChoice.catch(()=>null);
+  installPromptEvent = null;
 }
 
 function maybeShowBrowserNotifications(rows, before){
@@ -1608,7 +1620,7 @@ async function enablePushNotifications(){
       method:'POST',
       body: JSON.stringify({ subscription })
     });
-    alert('Phone alerts enabled for this device.');
+    alert('Phone alerts enabled for this device. Background alerts can arrive even when the app tab is closed if this browser keeps web push active.');
   }catch(e){
     alert(e.message || 'Could not enable phone alerts.');
   }
@@ -1627,6 +1639,7 @@ async function openNotificationSettings(){
     <div class="field"><label><input id="ns-escalation" type="checkbox" ${settings.escalation_alerts !== false ? 'checked' : ''} ${currentUser.role === 'admin' ? 'disabled' : ''} style="width:auto;margin-right:7px;"> Escalation alerts${currentUser.role === 'admin' ? ' (required)' : ''}</label></div>
     <div class="actions-row">
       <button class="btn" onclick="enablePushNotifications()">Enable phone push</button>
+      <button class="btn" onclick="installAppFromPrompt()">Install app</button>
     </div>
     <div id="notification-settings-error" style="color:var(--red-dark);font-size:12.5px;min-height:16px;font-weight:500;"></div>
     <div class="modal-actions">
@@ -1998,3 +2011,7 @@ async function submitRejectResolution(id){
 
 document.getElementById('modal-backdrop').addEventListener('click', e=>{ if(e.target.id==='modal-backdrop') closeModal(); });
 document.getElementById('login-pass').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  installPromptEvent = e;
+});
