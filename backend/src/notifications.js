@@ -145,7 +145,7 @@ async function dispatchNotification({ issueId, userId, phone, eventType, title, 
       [response.ok ? 'sent' : 'failed', response.ok ? null : responseError || `HTTP ${response.status}`, logId]
     );
   } catch (e) {
-    console.error('Notification failed:', e);
+    console.warn('Optional notification delivery failed:', e.message);
     if (logId) {
       await pool.query('UPDATE notification_logs SET status=$1, error=$2 WHERE id=$3', ['failed', e.message, logId]);
     }
