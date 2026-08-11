@@ -50,18 +50,74 @@ async function sendViaWebhook(payload) {
   });
 }
 
-async function dispatchNotification({ issueId, userId, phone, eventType, message }) {
+const EVENT_SETTINGS = {
+  issue_assigned: 'issue_assigned',
+  force_issue_created: 'issue_assigned',
+  issue_verified: 'issue_assigned',
+  due_soon: 'due_soon',
+  overdue: 'overdue',
+  escalation: 'escalation_alerts',
+  issue_resolution_submitted: 'resolution_updates',
+  issue_final_verified: 'resolution_updates',
+  issue_resolution_rejected: 'resolution_updates'
+};
+
+const EVENT_TITLES = {
+  force_issue_created: 'New maintenance issue',
+  issue_assigned: 'Issue assigned to you',
+  issue_verified: 'Issue verified',
+  issue_resolution_submitted: 'Final OK required',
+  issue_final_verified: 'Issue closed',
+  issue_resolution_rejected: 'Resolution rejected',
+  due_soon: 'Issue due soon',
+  overdue: 'Overdue issue',
+  escalation: 'Escalation alert',
+  manual_reminder: 'Maintenance reminder',
+  system: 'System notification'
+};
+
+async function settingAllows(userId, eventType) {
+  if (!userId) return true;
+  const key = EVENT_SETTINGS[eventType];
+  if (!key) return true;
+  const { rows } = await pool.query(
+    `SELECT ${key} AS allowed FROM notification_settings WHERE user_id=$1`,
+    [userId]
+  );
+  return !rows.length || rows[0].allowed !== false;
+}
+
+function titleFor(eventType, title) {
+  return title || EVENT_TITLES[eventType] || 'MAXBACHAT Maintenance';
+}
+
+async function dispatchNotification({ issueId, userId, phone, eventType, title, message, priority, actionUrl, reminderKey }) {
   let logId = null;
   try {
+    if (!(await settingAllows(userId, eventType))) return;
     const inserted = await pool.query(
-      `INSERT INTO notification_logs (issue_id, user_id, phone, event_type, message)
-       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [issueId || null, userId || null, phone || null, eventType, message]
+      `INSERT INTO notification_logs
+        (issue_id, user_id, phone, event_type, title, message, priority, action_url, reminder_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (reminder_key) WHERE reminder_key IS NOT NULL DO NOTHING
+       RETURNING id`,
+      [
+        issueId || null,
+        userId || null,
+        phone || null,
+        eventType,
+        titleFor(eventType, title),
+        message,
+        priority || 'normal',
+        actionUrl || (issueId ? `/?issue=${encodeURIComponent(issueId)}` : '/'),
+        reminderKey || null
+      ]
     );
+    if (!inserted.rows.length) return;
     logId = inserted.rows[0].id;
 
     if (!phone) {
-      await pool.query('UPDATE notification_logs SET status=$1 WHERE id=$2', ['queued', logId]);
+      await pool.query('UPDATE notification_logs SET status=$1 WHERE id=$2', ['app_only', logId]);
       return;
     }
 
@@ -71,7 +127,7 @@ async function dispatchNotification({ issueId, userId, phone, eventType, message
     } else if (process.env.NOTIFICATION_WEBHOOK_URL) {
       response = await sendViaWebhook({ issueId, userId, phone, eventType, message });
     } else {
-      await pool.query('UPDATE notification_logs SET status=$1 WHERE id=$2', ['queued', logId]);
+      await pool.query('UPDATE notification_logs SET status=$1 WHERE id=$2', ['app_only', logId]);
       return;
     }
 
@@ -96,15 +152,27 @@ async function dispatchNotification({ issueId, userId, phone, eventType, message
   }
 }
 
-async function notifyUsers(users, issueId, eventType, message) {
-  await Promise.all((users || []).map(u => dispatchNotification({
+async function notifyUsers(users, issueId, eventType, message, options = {}) {
+  const payloadUsers = (users || []).filter(Boolean);
+  await Promise.all(payloadUsers.map(u => dispatchNotification({
     issueId,
     userId: u.id,
     phone: u.phone,
     eventType,
-    message
+    title: options.title,
+    message,
+    priority: options.priority,
+    actionUrl: options.actionUrl,
+    reminderKey: options.reminderKey ? `${options.reminderKey}:${u.id}` : null
   })));
-  await sendPushToUsers(users, { issueId, eventType, message });
+  await sendPushToUsers(payloadUsers, {
+    issueId,
+    eventType,
+    title: titleFor(eventType, options.title),
+    message,
+    priority: options.priority || 'normal',
+    actionUrl: options.actionUrl
+  });
 }
 
 async function sendPushToUsers(users, payload) {
@@ -120,11 +188,12 @@ async function sendPushToUsers(users, payload) {
     await Promise.all(rows.map(async row => {
       try {
         await webpush.sendNotification(row.subscription, JSON.stringify({
-          title: 'MAXBACHAT Maintenance Alert',
+          title: payload.title || 'MAXBACHAT Maintenance Alert',
           body: payload.message,
           issueId: payload.issueId,
           eventType: payload.eventType,
-          url: '/'
+          priority: payload.priority || 'normal',
+          url: payload.actionUrl || (payload.issueId ? `/?issue=${encodeURIComponent(payload.issueId)}` : '/')
         }));
       } catch (e) {
         if (e.statusCode === 404 || e.statusCode === 410) {

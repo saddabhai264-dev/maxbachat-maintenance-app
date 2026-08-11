@@ -23,6 +23,7 @@ let ISSUES = [];
 let USERS = [];
 let AUDIT_LOGS = [];
 let NOTIFICATIONS = [];
+let NOTIFICATION_SETTINGS = null;
 let VISITS = [];
 let REPORT_ISSUES = null;
 let ISSUE_MEDIA_LOADED = new Set();
@@ -30,6 +31,8 @@ let sidebarView = 'overview';
 let adminBranchFilter = 'all';
 let passwordChangeRequired = false;
 let notificationTimer = null;
+let seenNotificationIds = new Set();
+let notificationPanelOpen = false;
 
 /* ===================== API HELPER ===================== */
 async function apiFetch(path, opts={}){
@@ -89,16 +92,30 @@ async function loadAuditLogs(){
   AUDIT_LOGS = currentUser && currentUser.role === 'admin' ? await apiFetch('/users/audit/logs') : [];
 }
 async function loadNotifications(){
-  if(!currentUser || !['coordinator','admin'].includes(currentUser.role)){
+  if(!currentUser){
     NOTIFICATIONS = [];
     return;
   }
   try{
-    NOTIFICATIONS = await apiFetch('/notifications/mine');
+    const before = seenNotificationIds;
+    const rows = await apiFetch('/notifications/mine');
+    NOTIFICATIONS = rows;
+    maybeShowBrowserNotifications(rows, before);
+    seenNotificationIds = new Set(rows.map(n=>String(n.id)));
   }catch(e){
     console.error(e);
     NOTIFICATIONS = [];
   }
+}
+async function loadNotificationSettings(){
+  if(!currentUser) return null;
+  try{
+    NOTIFICATION_SETTINGS = await apiFetch('/notifications/settings');
+  }catch(e){
+    console.error(e);
+    NOTIFICATION_SETTINGS = null;
+  }
+  return NOTIFICATION_SETTINGS;
 }
 async function loadVisits(){
   if(!currentUser || !['admin','ceo','coordinator'].includes(currentUser.role)){
@@ -278,10 +295,14 @@ async function enterApp(){
   document.getElementById('user-initials').textContent = u.name.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
   document.getElementById('user-name').innerHTML = escapeHtml(u.name) + (u.isHead ? '<span class="head-badge">Head of Maintenance</span>':'');
   document.getElementById('user-role').textContent = ROLE_LABEL[u.role] + (u.branch ? ' \u00b7 '+branchName(u.branch) : ' \u00b7 All branches');
+  await loadNotificationSettings();
+  renderNotificationBell();
+  maybeShowNotificationPrompt();
   sidebarView = u.role==='admin' ? 'overview' : u.role==='captain' ? 'my-issues' : u.role==='auditor' ? 'pending-verify' : u.role==='coordinator' ? 'pending-close' : u.role==='reporter' ? 'my-issues' : 'summary';
   renderSidebar();
   renderMain();
   loadNotifications().then(() => {
+    renderNotificationBell();
     renderSidebar();
     if(sidebarView==='alerts' || sidebarView==='force-alerts') renderMain();
   });
@@ -292,13 +313,19 @@ async function enterApp(){
   loadUsers().then(() => {
     if(currentUser && currentUser.role === 'admin') renderMain();
   });
+  const issueFromUrl = new URLSearchParams(window.location.search).get('issue');
+  if(issueFromUrl) setTimeout(()=>focusIssue(issueFromUrl), 250);
 }
 function doLogout(){
   currentUser = null; AUTH_TOKEN = null;
   passwordChangeRequired = false;
   if(notificationTimer){ clearInterval(notificationTimer); notificationTimer = null; }
   localStorage.removeItem('mb_token'); localStorage.removeItem('mb_user');
+  seenNotificationIds = new Set();
+  notificationPanelOpen = false;
   document.getElementById('modal-backdrop').classList.remove('show');
+  document.getElementById('notify-panel').classList.remove('show');
+  document.getElementById('notify-prompt').classList.remove('show');
   document.getElementById('app').style.display='none';
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('login-id').value='';
@@ -380,12 +407,176 @@ async function setView(v){
 
 function startNotificationPolling(){
   if(notificationTimer){ clearInterval(notificationTimer); notificationTimer = null; }
-  if(!currentUser || !['coordinator','admin'].includes(currentUser.role)) return;
+  if(!currentUser) return;
   notificationTimer = setInterval(async () => {
     await loadNotifications();
+    renderNotificationBell();
     renderSidebar();
     if(sidebarView==='force-alerts' || sidebarView==='alerts') renderMain();
   }, 45000);
+}
+
+function unreadNotifications(){
+  return NOTIFICATIONS.filter(n=>!n.is_read);
+}
+
+function renderNotificationBell(){
+  const count = document.getElementById('notify-count');
+  const panel = document.getElementById('notify-panel');
+  if(!count || !panel) return;
+  const unread = unreadNotifications().length;
+  count.textContent = unread > 99 ? '99+' : String(unread);
+  count.classList.toggle('show', unread > 0);
+  if(notificationPanelOpen) panel.innerHTML = notificationPanelHtml();
+}
+
+function notificationPanelHtml(){
+  return `
+    <div class="notify-head">
+      <span>Notifications</span>
+      <span class="notify-tools">
+        <button onclick="event.stopPropagation(); openNotificationSettings()">Settings</button>
+        <button onclick="event.stopPropagation(); markAllNotificationsRead()">Mark all read</button>
+      </span>
+    </div>
+    ${NOTIFICATIONS.length ? NOTIFICATIONS.map(n=>`
+      <div class="notify-item ${n.is_read ? '' : 'unread'}" onclick="openNotification(${n.id})">
+        <div class="notify-title">
+          <span>${escapeHtml(n.title || notificationTitle(n.event_type))}</span>
+          <span class="notify-priority ${escapeHtml(n.priority || 'normal')}">${escapeHtml(n.priority || 'normal')}</span>
+        </div>
+        <div class="notify-message">${escapeHtml(shortNotificationMessage(n.message || ''))}</div>
+        <div class="notify-time">${fmtDateTime(n.created_at)}</div>
+      </div>
+    `).join('') : '<div class="empty-state" style="margin:12px;">No notifications yet.</div>'}
+  `;
+}
+
+function notificationTitle(type){
+  const map = {
+    force_issue_created:'New maintenance issue',
+    issue_assigned:'Issue assigned',
+    issue_verified:'Issue verified',
+    issue_resolution_submitted:'Final OK required',
+    issue_final_verified:'Issue closed',
+    issue_resolution_rejected:'Resolution rejected',
+    due_soon:'Issue due soon',
+    overdue:'Overdue issue',
+    escalation:'Escalation alert',
+    manual_reminder:'Maintenance reminder'
+  };
+  return map[type] || 'MAXBACHAT Maintenance';
+}
+
+function shortNotificationMessage(message){
+  return String(message || '').replace(/^MAXBACHAT:\s*/i, '').slice(0, 220);
+}
+
+function toggleNotificationPanel(){
+  notificationPanelOpen = !notificationPanelOpen;
+  const panel = document.getElementById('notify-panel');
+  panel.classList.toggle('show', notificationPanelOpen);
+  renderNotificationBell();
+}
+
+async function openNotification(id){
+  const n = NOTIFICATIONS.find(x=>String(x.id)===String(id));
+  if(!n) return;
+  if(!n.is_read){
+    try{ await apiFetch(`/notifications/${id}/read`, { method:'POST', body: JSON.stringify({}) }); }catch(e){ console.error(e); }
+    n.is_read = true;
+    renderNotificationBell();
+  }
+  notificationPanelOpen = false;
+  document.getElementById('notify-panel').classList.remove('show');
+  if(n.issue_id) focusIssue(n.issue_id);
+}
+
+async function markAllNotificationsRead(){
+  try{
+    await apiFetch('/notifications/read-all', { method:'POST', body: JSON.stringify({}) });
+    NOTIFICATIONS.forEach(n=>{ n.is_read = true; });
+    renderNotificationBell();
+  }catch(e){
+    alert(e.message || 'Could not mark notifications read.');
+  }
+}
+
+function focusIssue(issueId){
+  const issue = ISSUES.find(i=>i.id===issueId);
+  if(issue){
+    adminBranchFilter = currentUser && currentUser.role === 'admin' ? issue.branch : adminBranchFilter;
+    if(currentUser.role === 'admin') sidebarView = 'overview';
+    else if(currentUser.role === 'captain' || currentUser.role === 'reporter') sidebarView = 'my-issues';
+    else if(currentUser.role === 'auditor') sidebarView = issue.status === 'open' ? 'pending-verify' : 'aud-all';
+    else if(currentUser.role === 'coordinator') sidebarView = issue.status === 'verified' ? 'pending-close' : issue.status === 'pending_review' ? 'sc-review' : 'sc-headview';
+    renderSidebar();
+    renderMain();
+    setTimeout(() => {
+      const cards = [...document.querySelectorAll('.ticket')];
+      const card = cards.find(el => el.textContent.includes(issueId));
+      if(card){
+        card.scrollIntoView({behavior:'smooth', block:'center'});
+        card.style.boxShadow = '0 0 0 3px rgba(214,35,28,.22)';
+        setTimeout(()=>{ card.style.boxShadow = ''; }, 2200);
+      }
+    }, 80);
+  }
+}
+
+function maybeShowNotificationPrompt(){
+  const prompt = document.getElementById('notify-prompt');
+  if(!prompt || !('Notification' in window)) return;
+  const localState = localStorage.getItem('mb_notification_prompt');
+  if(localState || Notification.permission !== 'default') return;
+  prompt.innerHTML = `
+    <b>Enable MAXBACHAT notifications?</b>
+    <p>Get assigned issue, due soon, overdue, and closure alerts in this browser.</p>
+    <div class="actions-row">
+      <button class="btn btn-fill" onclick="allowBrowserNotifications()">Allow Notifications</button>
+      <button class="btn" onclick="dismissNotificationPrompt()">Not Now</button>
+    </div>
+  `;
+  prompt.classList.add('show');
+}
+
+async function allowBrowserNotifications(){
+  const prompt = document.getElementById('notify-prompt');
+  try{
+    const permission = await Notification.requestPermission();
+    localStorage.setItem('mb_notification_prompt', permission);
+    if(permission === 'granted' && NOTIFICATION_SETTINGS){
+      NOTIFICATION_SETTINGS.browser_enabled = true;
+      await saveNotificationSettings(NOTIFICATION_SETTINGS, false);
+    }
+  }finally{
+    prompt.classList.remove('show');
+  }
+}
+
+function dismissNotificationPrompt(){
+  localStorage.setItem('mb_notification_prompt', 'dismissed');
+  document.getElementById('notify-prompt').classList.remove('show');
+}
+
+function maybeShowBrowserNotifications(rows, before){
+  if(!('Notification' in window) || Notification.permission !== 'granted') return;
+  if(NOTIFICATION_SETTINGS && NOTIFICATION_SETTINGS.browser_enabled === false) return;
+  if(!before || !before.size) return;
+  rows.filter(n=>!n.is_read && !before.has(String(n.id))).slice(0, 3).forEach(n=>{
+    try{
+      const note = new Notification(n.title || notificationTitle(n.event_type), {
+        body: shortNotificationMessage(n.message || ''),
+        tag: n.issue_id || String(n.id),
+        data: { id:n.id, issueId:n.issue_id }
+      });
+      note.onclick = () => {
+        window.focus();
+        openNotification(n.id);
+        note.close();
+      };
+    }catch(e){ console.error(e); }
+  });
 }
 
 /* ===================== MAIN RENDER ===================== */
@@ -512,7 +703,7 @@ function renderAdmin(){
   m.innerHTML = `
     <div class="page-head">
       <div><h1>Head office overview</h1><p>Maintenance performance across all branches and locations</p></div>
-      <div class="actions-row"><button class="btn" onclick="sendMaintenanceReminders()">Send reminders</button><button class="btn btn-fill" onclick="openReportExportModal()">Export report</button></div>
+      <div class="actions-row"><button class="btn" onclick="runAutomaticReminderCheck()">SLA check</button><button class="btn" onclick="sendMaintenanceReminders()">Send reminders</button><button class="btn btn-fill" onclick="openReportExportModal()">Export report</button></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="lbl">Total issues logged</div><div class="val">${total}</div></div>
@@ -751,22 +942,25 @@ async function renderAdminVisits(){
 
 async function renderAdminAlerts(){
   const m = document.getElementById('main');
-  await loadNotifications();
-  const failed = NOTIFICATIONS.filter(n=>n.status==='failed').length;
-  const sent = NOTIFICATIONS.filter(n=>n.status==='sent').length;
-  const queued = NOTIFICATIONS.filter(n=>n.status==='queued').length;
+  let logs = [];
+  try{ logs = await apiFetch('/notifications/admin'); }catch(e){ logs = []; }
+  const failed = logs.filter(n=>n.status==='failed').length;
+  const sent = logs.filter(n=>n.status==='sent').length;
+  const queued = logs.filter(n=>n.status==='queued').length;
+  const appOnly = logs.filter(n=>n.status==='app_only').length;
   m.innerHTML = `
     <div class="page-head">
-      <div><h1>Notification alerts</h1><p>WhatsApp delivery status for issue notifications</p></div>
+      <div><h1>Notification alerts</h1><p>Internal app notifications plus optional WhatsApp delivery status</p></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card green"><div class="lbl">Sent</div><div class="val">${sent}</div></div>
+      <div class="stat-card"><div class="lbl">App only</div><div class="val">${appOnly}</div></div>
       <div class="stat-card red"><div class="lbl">Failed</div><div class="val">${failed}</div></div>
       <div class="stat-card amber"><div class="lbl">Queued</div><div class="val">${queued}</div></div>
     </div>
     <div class="panel">
       <div class="panel-title">Latest notification attempts</div>
-      <div class="bars">${renderNotificationRows(NOTIFICATIONS)}</div>
+      <div class="bars">${renderNotificationRows(logs)}</div>
     </div>
   `;
 }
@@ -963,8 +1157,8 @@ function renderNotificationRows(list){
   return list.map(n => `
     <div class="bar-row" style="border-bottom:1px solid var(--line);padding-bottom:10px;">
       <div class="bar-top">
-        <span class="bname">${escapeHtml(n.issue_id || 'Notification')}</span>
-        <span class="bpct">${escapeHtml(n.status || 'queued')} \u00b7 ${fmtDateTime(n.created_at)}</span>
+        <span class="bname">${escapeHtml(n.title || notificationTitle(n.event_type))}${n.issue_id ? ' \u00b7 '+escapeHtml(n.issue_id) : ''}</span>
+        <span class="bpct">${n.is_read ? 'read' : 'unread'} \u00b7 ${escapeHtml(n.status || 'queued')} \u00b7 ${fmtDateTime(n.created_at)}</span>
       </div>
       <div class="desc" style="white-space:pre-line;">${escapeHtml(n.message || '')}${n.error ? '\nError: '+escapeHtml(n.error) : ''}</div>
     </div>
@@ -1201,6 +1395,17 @@ async function sendMaintenanceReminders(){
   }
 }
 
+async function runAutomaticReminderCheck(){
+  try{
+    const result = await apiFetch('/notifications/automatic-reminders', { method:'POST', body: JSON.stringify({}) });
+    await loadNotifications();
+    renderNotificationBell();
+    alert(`SLA check complete. ${result.notifications || 0} app notifications created for ${result.issues || 0} active issues.`);
+  }catch(e){
+    alert(e.message || 'Could not run SLA reminder check.');
+  }
+}
+
 async function viewIssueProofMedia(id, btn){
   if(btn){ btn.textContent = 'Loading proof...'; btn.disabled = true; }
   try{
@@ -1406,6 +1611,58 @@ async function enablePushNotifications(){
     alert('Phone alerts enabled for this device.');
   }catch(e){
     alert(e.message || 'Could not enable phone alerts.');
+  }
+}
+
+async function openNotificationSettings(){
+  const settings = await loadNotificationSettings() || {};
+  showModal(`
+    <div class="modal-head"><h3>Notification settings</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">WhatsApp is optional. App bell notifications continue even if WhatsApp fails.</p>
+    <div class="field"><label><input id="ns-browser" type="checkbox" ${settings.browser_enabled !== false ? 'checked' : ''} style="width:auto;margin-right:7px;"> Browser notifications</label></div>
+    <div class="field"><label><input id="ns-assigned" type="checkbox" ${settings.issue_assigned !== false ? 'checked' : ''} style="width:auto;margin-right:7px;"> Issue assigned / new issue alerts</label></div>
+    <div class="field"><label><input id="ns-due" type="checkbox" ${settings.due_soon !== false ? 'checked' : ''} style="width:auto;margin-right:7px;"> Due soon reminders</label></div>
+    <div class="field"><label><input id="ns-overdue" type="checkbox" ${settings.overdue !== false ? 'checked' : ''} ${currentUser.role === 'coordinator' ? 'disabled' : ''} style="width:auto;margin-right:7px;"> Overdue alerts${currentUser.role === 'coordinator' ? ' (required)' : ''}</label></div>
+    <div class="field"><label><input id="ns-resolution" type="checkbox" ${settings.resolution_updates !== false ? 'checked' : ''} style="width:auto;margin-right:7px;"> Resolution / closure updates</label></div>
+    <div class="field"><label><input id="ns-escalation" type="checkbox" ${settings.escalation_alerts !== false ? 'checked' : ''} ${currentUser.role === 'admin' ? 'disabled' : ''} style="width:auto;margin-right:7px;"> Escalation alerts${currentUser.role === 'admin' ? ' (required)' : ''}</label></div>
+    <div class="actions-row">
+      <button class="btn" onclick="enablePushNotifications()">Enable phone push</button>
+    </div>
+    <div id="notification-settings-error" style="color:var(--red-dark);font-size:12.5px;min-height:16px;font-weight:500;"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitNotificationSettings()">Save settings</button>
+    </div>
+  `);
+}
+
+async function saveNotificationSettings(settings, showError = true){
+  return apiFetch('/notifications/settings', {
+    method:'POST',
+    body: JSON.stringify(settings)
+  }).catch(e => {
+    if(showError) throw e;
+    console.error(e);
+  });
+}
+
+async function submitNotificationSettings(){
+  const err = document.getElementById('notification-settings-error');
+  err.textContent = '';
+  const payload = {
+    browser_enabled: document.getElementById('ns-browser').checked,
+    issue_assigned: document.getElementById('ns-assigned').checked,
+    due_soon: document.getElementById('ns-due').checked,
+    overdue: document.getElementById('ns-overdue').checked,
+    resolution_updates: document.getElementById('ns-resolution').checked,
+    escalation_alerts: document.getElementById('ns-escalation').checked
+  };
+  try{
+    NOTIFICATION_SETTINGS = await saveNotificationSettings(payload);
+    closeModal();
+    renderNotificationBell();
+  }catch(e){
+    err.textContent = e.message || 'Could not save notification settings.';
   }
 }
 

@@ -73,6 +73,30 @@
   .user-meta .role{font-size:10.5px;color:var(--ink-soft);}
   .logout-btn{border:1px solid var(--line);background:#fff;padding:8px 14px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);}
   .logout-btn:hover{border-color:var(--red);color:var(--red-dark);}
+  .notify-wrap{position:relative;}
+  .notify-btn{border:1px solid var(--line);background:#fff;min-width:42px;height:38px;border-radius:10px;font-size:16px;font-weight:800;color:var(--ink);display:inline-flex;align-items:center;justify-content:center;gap:4px;}
+  .notify-btn:hover{border-color:var(--red);color:var(--red-dark);}
+  .notify-count{display:none;min-width:18px;height:18px;border-radius:18px;background:var(--red);color:#fff;font-size:10px;align-items:center;justify-content:center;padding:0 5px;}
+  .notify-count.show{display:inline-flex;}
+  .notify-panel{display:none;position:absolute;right:0;top:45px;width:360px;max-height:78vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 36px rgba(28,27,26,.18);z-index:80;}
+  .notify-panel.show{display:block;}
+  .notify-head{display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid var(--line);font-weight:800;}
+  .notify-tools{display:flex;gap:6px;}
+  .notify-tools button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 8px;font-size:11px;font-weight:700;}
+  .notify-item{border-bottom:1px solid var(--line);padding:12px 14px;cursor:pointer;background:#fff;}
+  .notify-item:hover{background:#FBFAF7;}
+  .notify-item.unread{background:#FFF8F7;}
+  .notify-item:last-child{border-bottom:none;}
+  .notify-title{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;font-weight:800;margin-bottom:4px;}
+  .notify-priority{font-size:9px;text-transform:uppercase;border-radius:999px;padding:2px 6px;background:var(--blue-tint);color:var(--blue);height:max-content;}
+  .notify-priority.high{background:var(--amber-tint);color:var(--amber);}
+  .notify-priority.critical{background:var(--red-tint);color:var(--red-dark);}
+  .notify-message{font-size:12px;color:var(--ink-soft);line-height:1.45;white-space:pre-line;}
+  .notify-time{font-size:10.5px;color:var(--ink-soft);margin-top:6px;font-weight:700;}
+  .notify-prompt{display:none;position:fixed;right:18px;bottom:18px;max-width:360px;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 44px rgba(28,27,26,.20);padding:16px;z-index:120;}
+  .notify-prompt.show{display:block;}
+  .notify-prompt b{display:block;font-size:14px;margin-bottom:4px;}
+  .notify-prompt p{margin:0 0 12px;font-size:12.5px;color:var(--ink-soft);line-height:1.45;}
 
   .head-badge{display:inline-flex;align-items:center;gap:4px;background:var(--red);color:#fff;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.3px;text-transform:uppercase;margin-left:6px;vertical-align:middle;}
 
@@ -207,6 +231,8 @@
     .topbar-title small{font-size:10px;}
     .topbar-right{gap:6px;flex-wrap:wrap;justify-content:flex-end;}
     .user-chip{display:none;}
+    .notify-panel{position:fixed;left:10px;right:10px;top:66px;width:auto;max-height:70vh;}
+    .notify-prompt{left:12px;right:12px;bottom:12px;max-width:none;}
     .logout-btn{padding:7px 9px;font-size:11.5px;}
     .layout{display:block;}
     .sidebar{display:flex;position:sticky;top:58px;width:100%;height:auto;overflow-x:auto;padding:8px 10px;background:var(--paper);z-index:15;border-bottom:1px solid var(--line);}
@@ -276,6 +302,10 @@
           <div class="role" id="user-role"></div>
         </div>
       </div>
+      <div class="notify-wrap">
+        <button class="notify-btn" onclick="toggleNotificationPanel()" title="Notifications">🔔 <span id="notify-count" class="notify-count"></span></button>
+        <div class="notify-panel" id="notify-panel"></div>
+      </div>
       <button class="logout-btn" onclick="openChangePasswordModal(false)">Account</button>
       <button class="logout-btn" onclick="doLogout()">Log out</button>
     </div>
@@ -291,6 +321,7 @@
 <div class="modal-backdrop" id="modal-backdrop">
   <div class="modal" id="modal-box"></div>
 </div>
+<div class="notify-prompt" id="notify-prompt"></div>
 
 <script src="app.js"></script>
 </body>

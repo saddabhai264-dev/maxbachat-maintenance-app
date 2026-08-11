@@ -9,6 +9,9 @@
     }
   },
   "outputDirectory": "public",
+  "crons": [
+    { "path": "/api/notifications/run-reminders", "schedule": "0 9 * * *" }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" },
     { "source": "/health", "destination": "/api/index.js" },

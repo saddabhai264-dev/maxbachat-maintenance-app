@@ -165,14 +165,39 @@ CREATE TABLE IF NOT EXISTS notification_logs (
   user_id     TEXT REFERENCES users(id) ON DELETE SET NULL,
   phone       TEXT,
   event_type  TEXT NOT NULL,
+  title       TEXT,
   message     TEXT NOT NULL,
+  priority    TEXT NOT NULL DEFAULT 'normal',
+  action_url  TEXT,
+  is_read     BOOLEAN NOT NULL DEFAULT FALSE,
+  read_at     TIMESTAMPTZ,
+  reminder_key TEXT,
   status      TEXT NOT NULL DEFAULT 'queued',
   error       TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS title TEXT;
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS priority TEXT NOT NULL DEFAULT 'normal';
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS action_url TEXT;
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS is_read BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
+ALTER TABLE notification_logs ADD COLUMN IF NOT EXISTS reminder_key TEXT;
 CREATE INDEX IF NOT EXISTS idx_notifications_issue ON notification_logs(issue_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user  ON notification_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notification_logs(user_id, is_read, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_reminder_key ON notification_logs(reminder_key) WHERE reminder_key IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS notification_settings (
+  user_id             TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  browser_enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+  issue_assigned      BOOLEAN NOT NULL DEFAULT TRUE,
+  due_soon            BOOLEAN NOT NULL DEFAULT TRUE,
+  overdue             BOOLEAN NOT NULL DEFAULT TRUE,
+  resolution_updates  BOOLEAN NOT NULL DEFAULT TRUE,
+  escalation_alerts   BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS visit_logs (
   id           BIGSERIAL PRIMARY KEY,
