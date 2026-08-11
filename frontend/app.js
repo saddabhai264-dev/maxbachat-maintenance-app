@@ -126,9 +126,9 @@ function normalizeIssue(i){
     closeProof:i.close_proof,
     closeProofMedia: closeMedia ? {type:closeMedia.media_type, dataUrl:closeMedia.url} : null,
     closedByName:i.closed_by_name, closedAt:i.closed_at,
-    deadlineAt:i.deadline_at, deadlineSetByName:i.deadline_set_by_name, deadlineNote:i.deadline_note,
     resolvedByName:i.resolved_by_name, resolvedAt:i.resolved_at,
-    finalVerifiedByName:i.final_verified_by_name, finalVerifiedAt:i.final_verified_at, finalVerifyNote:i.final_verify_note
+    finalVerifiedByName:i.final_verified_by_name, finalVerifiedAt:i.final_verified_at,
+    finalVerifyNote:i.final_verify_note, finalScore:i.final_score
   };
 }
 function genLocalId(){ return 'tmp-' + Date.now(); }
@@ -598,6 +598,7 @@ function reportDocumentHtml(issues = REPORT_ISSUES || ISSUES){
       <td>${i.closedAt ? fmtDateTime(i.closedAt) : '-'}</td>
       <td>${issueResolutionText(i)}</td>
       <td>${escapeHtml(i.openedByName || '')}</td>
+      <td>${i.finalScore ? i.finalScore + '/5' : '-'}</td>
       <td>${img}</td>
     </tr>`;
   }).join('');
@@ -618,7 +619,7 @@ function reportDocumentHtml(issues = REPORT_ISSUES || ISSUES){
       </div>
       <div class="report-section">
         <h4>Issue details</h4>
-        <table class="report-table"><thead><tr><th>ID</th><th>Branch</th><th>Issue</th><th>Status</th><th>Opened</th><th>Closed</th><th>Resolve time</th><th>Opened by</th><th>Photo</th></tr></thead><tbody>${issueRows || '<tr><td colspan="9">No issues logged.</td></tr>'}</tbody></table>
+        <table class="report-table"><thead><tr><th>ID</th><th>Branch</th><th>Issue</th><th>Status</th><th>Opened</th><th>Closed</th><th>Resolve time</th><th>Opened by</th><th>Marks</th><th>Photo</th></tr></thead><tbody>${issueRows || '<tr><td colspan="10">No issues logged.</td></tr>'}</tbody></table>
       </div>
     </div>
   `;
@@ -1036,29 +1037,26 @@ function ticketCard(i, mode){
       : i.status==='pending_review'
         ? '<span class="badge verified">Final OK</span>'
         : '<span class="badge closed">Closed</span>';
-  const isOverdue = i.deadlineAt && i.status !== 'closed' && new Date(i.deadlineAt) < new Date();
   let meta = `<div class="meta-line">
     <span>Opened by <b>${i.openedByName}</b> \u00b7 ${fmtDate(i.openedAt)}${i.branch ? ' \u00b7 '+i.branch : ''}</span>
     ${i.verifiedByName ? `<span>Verified by <b>${i.verifiedByName}</b> \u00b7 ${fmtDate(i.verifiedAt)}</span>` : ''}
-    ${i.deadlineAt ? `<span>Deadline <b>${fmtDateTime(i.deadlineAt)}</b>${isOverdue ? ' \u00b7 OVERDUE' : ''}${i.deadlineSetByName ? ' \u00b7 set by '+escapeHtml(i.deadlineSetByName) : ''}</span>` : ''}
     ${i.resolvedByName ? `<span>Submitted resolved by <b>${i.resolvedByName}</b> \u00b7 ${fmtDate(i.resolvedAt)}</span>` : ''}
     ${i.closedByName ? `<span>Final closed by <b>${i.closedByName}</b> \u00b7 ${fmtDate(i.closedAt)}</span>` : ''}
+    ${i.finalScore ? `<span>Admin marks <b>${i.finalScore}/5</b></span>` : ''}
   </div>`;
   let proofs = '';
   if(i.openProof) proofs += `<div class="proof-note"><b>Opening proof:</b> ${escapeHtml(i.openProof)}</div>`;
   proofs += mediaBlock(i.openProofMedia, 'Opening photo / video');
   if(i.auditorNote) proofs += `<div class="proof-note"><b>Auditor note:</b> ${escapeHtml(i.auditorNote)}</div>`;
-  if(i.deadlineNote) proofs += `<div class="proof-note"><b>Deadline note:</b> ${escapeHtml(i.deadlineNote)}</div>`;
   if(i.closeProof) proofs += `<div class="proof-note"><b>Closure proof:</b> ${escapeHtml(i.closeProof)}</div>`;
   proofs += mediaBlock(i.closeProofMedia, 'Closure photo / video');
   if(i.finalVerifyNote) proofs += `<div class="proof-note"><b>Final verification note:</b> ${escapeHtml(i.finalVerifyNote)}</div>`;
 
   let cta = '';
   if(mode==='verify' && i.status==='open') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openVerifyModal('${i.id}')">Verify issue</button></div>`;
-  if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openDeadlineModal('${i.id}')">${i.deadlineAt ? 'Update deadline' : 'Set deadline'}</button><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Submit for final OK</button></div>`;
+  if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Submit for final OK</button></div>`;
   const canFinal = i.status === 'pending_review' && currentUser && (
-    currentUser.role === 'admin' ||
-    (['auditor','captain','reporter'].includes(currentUser.role) && currentUser.branch === i.branch)
+    currentUser.role === 'admin'
   );
   if((mode==='final' || canFinal) && canFinal){
     const finalButtons = `<button class="btn-ghost-sm" style="width:100%" onclick="openFinalVerifyModal('${i.id}')">Approve final closure</button><button class="btn-ghost-sm" style="width:100%;color:var(--red-dark);border-color:var(--red-tint);" onclick="openRejectResolutionModal('${i.id}')">Reject / send back</button>`;
@@ -1563,45 +1561,19 @@ async function submitClose(id){
   }
 }
 
-function openDeadlineModal(id){
-  const i = ISSUES.find(x=>x.id===id);
-  const existing = i && i.deadlineAt ? new Date(i.deadlineAt) : null;
-  const value = existing ? new Date(existing.getTime() - existing.getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
-  showModal(`
-    <div class="modal-head"><h3>${i.deadlineAt ? 'Update deadline' : 'Set deadline'}</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
-    <p class="sub">${escapeHtml(i.title)}</p>
-    <div class="field"><label>Commitment date & time</label><input id="f-deadline-at" type="datetime-local" value="${value}"></div>
-    <div class="field"><label>Deadline note</label><textarea id="f-deadline-note" placeholder="e.g. Parts arriving tomorrow, repair before 6 PM">${escapeHtml(i.deadlineNote || '')}</textarea></div>
-    <div class="proof-note">This deadline will be visible to branch/admin and used for overdue tracking.</div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-fill" onclick="submitDeadline('${id}')">Save deadline</button>
-    </div>
-  `);
-}
-async function submitDeadline(id){
-  const deadlineAt = document.getElementById('f-deadline-at').value;
-  const note = document.getElementById('f-deadline-note').value.trim();
-  if(!deadlineAt){ alert('Please select a deadline.'); return; }
-  const saveBtn = document.querySelector('.modal-actions .btn-fill');
-  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
-  try{
-    await apiFetch(`/issues/${id}/deadline`, { method:'POST', body: JSON.stringify({ deadlineAt, note }) });
-    await loadIssues();
-    closeModal();
-    renderSidebar(); renderMain();
-  }catch(e){
-    alert(e.message || 'Could not save deadline.');
-    if(saveBtn){ saveBtn.textContent='Save deadline'; saveBtn.disabled=false; }
-  }
-}
-
 function openFinalVerifyModal(id){
   const i = ISSUES.find(x=>x.id===id);
   showModal(`
     <div class="modal-head"><h3>Approve final closure</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
     <p class="sub">${escapeHtml(i.title)}</p>
     <div class="proof-note">Only approve after checking the work is actually completed.</div>
+    <div class="field"><label>Admin marks</label><select id="f-final-score">
+      <option value="5">5/5 - Excellent</option>
+      <option value="4">4/5 - Good</option>
+      <option value="3">3/5 - Acceptable</option>
+      <option value="2">2/5 - Weak</option>
+      <option value="1">1/5 - Poor but accepted</option>
+    </select></div>
     <div class="field"><label>Final verification note</label><textarea id="f-final-note" placeholder="e.g. Checked on floor, freezer cooling is normal"></textarea></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
@@ -1611,10 +1583,11 @@ function openFinalVerifyModal(id){
 }
 async function submitFinalVerify(id){
   const note = document.getElementById('f-final-note').value.trim();
+  const score = document.getElementById('f-final-score').value;
   const saveBtn = document.querySelector('.modal-actions .btn-fill');
   if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
   try{
-    await apiFetch(`/issues/${id}/final-verify`, { method:'POST', body: JSON.stringify({ note }) });
+    await apiFetch(`/issues/${id}/final-verify`, { method:'POST', body: JSON.stringify({ note, score }) });
     await loadIssues();
     closeModal();
     renderSidebar(); renderMain();

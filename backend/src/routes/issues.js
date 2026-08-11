@@ -3,7 +3,7 @@ const pool = require('../db');
 const { requireAuth, requirePasswordReady } = require('../auth');
 const { publicUrlFor, presignGetUrl } = require('../spaces');
 const { logAudit } = require('../audit');
-const { notifyUsers, usersForIssueBranch, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
+const { notifyUsers, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -54,19 +54,15 @@ async function mediaForClient(media) {
   })));
 }
 
-async function branchReviewers(branchCode) {
-  const local = await usersForIssueBranch(branchCode, ['auditor', 'captain', 'reporter']);
-  const admins = await pool.query(
-    `SELECT id, name, phone, role FROM users WHERE is_active=true AND role='admin'`
-  );
-  return [...local, ...admins.rows].filter((u, index, list) => (
-    u && u.id && list.findIndex(x => x.id === u.id) === index
-  ));
+function canFinalReview(user, issue) {
+  return user.role === 'admin';
 }
 
-function canFinalReview(user, issue) {
-  if (user.role === 'admin') return true;
-  return ['auditor', 'captain', 'reporter'].includes(user.role) && user.branch === issue.branch_code;
+async function adminReviewers() {
+  const { rows } = await pool.query(
+    `SELECT id, name, phone, role FROM users WHERE is_active=true AND role='admin'`
+  );
+  return rows;
 }
 
 // GET /api/issues  -> scoped by role. Admin/CEO/head see all; branch users see their queue.
@@ -240,47 +236,6 @@ router.post('/:id/verify', async (req, res) => {
   }
 });
 
-// POST /api/issues/:id/deadline -> maintenance team commits a deadline for a verified issue
-router.post('/:id/deadline', async (req, res) => {
-  const u = req.user;
-  if (u.role !== 'coordinator') return res.status(403).json({ error: 'Not allowed' });
-  const { deadlineAt, note } = req.body || {};
-  if (!deadlineAt || Number.isNaN(new Date(deadlineAt).getTime())) {
-    return res.status(400).json({ error: 'Valid deadline is required' });
-  }
-
-  try {
-    const { rows } = await pool.query('SELECT branch_code, status, title, deadline_at FROM issues WHERE id=$1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
-    const issue = rows[0];
-    if (!u.routes.includes(issue.branch_code)) return res.status(403).json({ error: 'This issue is not in your queue' });
-    if (!['verified', 'pending_review'].includes(issue.status)) {
-      return res.status(400).json({ error: 'Deadline can only be set for pending maintenance issues' });
-    }
-
-    await pool.query(
-      `UPDATE issues
-       SET deadline_at=$1, deadline_set_by=$2, deadline_set_by_name=$3, deadline_note=$4
-       WHERE id=$5`,
-      [deadlineAt, u.id, u.name, note || null, req.params.id]
-    );
-    await logAudit(u, 'issue_deadline_set', 'issue', req.params.id, {
-      branch: issue.branch_code,
-      deadlineAt
-    });
-    await notifyUsers(
-      await branchReviewers(issue.branch_code),
-      req.params.id,
-      'issue_deadline_set',
-      `MAXBACHAT: Deadline set for issue ${req.params.id} at ${issue.branch_code}: ${new Date(deadlineAt).toLocaleString('en-GB')}. ${issue.title}`
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Could not set deadline' });
-  }
-});
-
 // POST /api/issues/:id/close -> maintenance team submits resolution for final verification
 router.post('/:id/close', async (req, res) => {
   const u = req.user;
@@ -288,11 +243,10 @@ router.post('/:id/close', async (req, res) => {
   const { note, media } = req.body || {};
 
   try {
-    const { rows } = await pool.query('SELECT branch_code, status, title, deadline_at FROM issues WHERE id=$1', [req.params.id]);
+    const { rows } = await pool.query('SELECT branch_code, status, title FROM issues WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
     if (!u.routes.includes(rows[0].branch_code)) return res.status(403).json({ error: 'This issue is not in your queue' });
     if (rows[0].status !== 'verified') return res.status(400).json({ error: 'Issue must be verified before it can be resolved' });
-    if (!rows[0].deadline_at) return res.status(400).json({ error: 'Please set a deadline before submitting for final verification' });
     await pool.query(
       `UPDATE issues SET status='pending_review', resolved_by=$1, resolved_by_name=$2, resolved_at=now(), close_proof=$3
        WHERE id=$4`,
@@ -301,10 +255,10 @@ router.post('/:id/close', async (req, res) => {
     await insertMedia(req.params.id, media, 'close');
     await logAudit(u, 'issue_resolution_submitted', 'issue', req.params.id, { branch: rows[0].branch_code });
     await notifyUsers(
-      await branchReviewers(rows[0].branch_code),
+      await adminReviewers(),
       req.params.id,
       'issue_resolution_submitted',
-      `MAXBACHAT: Issue ${req.params.id} at ${rows[0].branch_code} was submitted as resolved. Please verify before final closure. ${rows[0].title}`
+      `MAXBACHAT: Issue ${req.params.id} at ${rows[0].branch_code} was submitted as resolved. Admin final OK required. ${rows[0].title}`
     );
     res.json({ ok: true });
   } catch (e) {
@@ -315,7 +269,11 @@ router.post('/:id/close', async (req, res) => {
 
 router.post('/:id/final-verify', async (req, res) => {
   const u = req.user;
-  const { note } = req.body || {};
+  const { note, score } = req.body || {};
+  const finalScore = score === undefined || score === null || score === '' ? 5 : Number(score);
+  if (!Number.isInteger(finalScore) || finalScore < 1 || finalScore > 5) {
+    return res.status(400).json({ error: 'Final score must be between 1 and 5' });
+  }
 
   try {
     const { rows } = await pool.query('SELECT branch_code, status, title FROM issues WHERE id=$1', [req.params.id]);
@@ -329,11 +287,12 @@ router.post('/:id/final-verify', async (req, res) => {
     await pool.query(
       `UPDATE issues
        SET status='closed', closed_by=$1, closed_by_name=$2, closed_at=now(),
-           final_verified_by=$1, final_verified_by_name=$2, final_verified_at=now(), final_verify_note=$3
-       WHERE id=$4`,
-      [u.id, u.name, note || null, req.params.id]
+           final_verified_by=$1, final_verified_by_name=$2, final_verified_at=now(), final_verify_note=$3,
+           final_score=$4
+       WHERE id=$5`,
+      [u.id, u.name, note || null, finalScore, req.params.id]
     );
-    await logAudit(u, 'issue_final_verified', 'issue', req.params.id, { branch: issue.branch_code });
+    await logAudit(u, 'issue_final_verified', 'issue', req.params.id, { branch: issue.branch_code, score: finalScore });
     await notifyUsers(
       await forcedMaintenanceRecipients(issue.branch_code),
       req.params.id,

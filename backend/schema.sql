@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS issues (
   final_verified_by_name TEXT,
   final_verified_at TIMESTAMPTZ,
   final_verify_note TEXT,
+  final_score     INTEGER,
   estimated_cost   NUMERIC,
   approval_status  TEXT NOT NULL DEFAULT 'not_required' CHECK (approval_status IN ('not_required','pending','approved','rejected')),
   approval_required BOOLEAN NOT NULL DEFAULT FALSE,
@@ -96,6 +97,9 @@ ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_by TEXT REFERENCES us
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_by_name TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_at TIMESTAMPTZ;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verify_note TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_score INTEGER;
+ALTER TABLE issues DROP CONSTRAINT IF EXISTS issues_final_score_check;
+ALTER TABLE issues ADD CONSTRAINT issues_final_score_check CHECK (final_score IS NULL OR (final_score >= 1 AND final_score <= 5));
 ALTER TABLE issues DROP CONSTRAINT IF EXISTS issues_status_check;
 ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK (status IN ('open','verified','pending_review','closed'));
 
