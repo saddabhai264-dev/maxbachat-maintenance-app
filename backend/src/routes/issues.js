@@ -3,7 +3,7 @@ const pool = require('../db');
 const { requireAuth, requirePasswordReady } = require('../auth');
 const { publicUrlFor, presignGetUrl } = require('../spaces');
 const { logAudit } = require('../audit');
-const { notifyUsers, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
+const { notifyUsers, coordinatorsForBranch, forcedMaintenanceRecipients, forceNotifyMaintenance } = require('../notifications');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -58,6 +58,12 @@ function canFinalReview(user, issue) {
   return user.role === 'admin';
 }
 
+function canReadIssue(user, issue) {
+  return canReadAll(user) ||
+    (user.role === 'coordinator' && (user.routes || []).includes(issue.branch_code)) ||
+    (user.branch && user.branch === issue.branch_code);
+}
+
 async function adminReviewers() {
   const { rows } = await pool.query(
     `SELECT id, name, phone, role FROM users WHERE is_active=true AND role='admin'`
@@ -93,11 +99,7 @@ router.get('/:id/media', async (req, res) => {
     const { rows } = await pool.query('SELECT id, branch_code FROM issues WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
     const issue = rows[0];
-    const u = req.user;
-    const allowed = canReadAll(u) ||
-      (u.role === 'coordinator' && (u.routes || []).includes(issue.branch_code)) ||
-      (u.branch && u.branch === issue.branch_code);
-    if (!allowed) return res.status(403).json({ error: 'Not allowed' });
+    if (!canReadIssue(req.user, issue)) return res.status(403).json({ error: 'Not allowed' });
 
     const media = await pool.query(
       'SELECT * FROM issue_media WHERE issue_id=$1 ORDER BY uploaded_at ASC',
@@ -107,6 +109,80 @@ router.get('/:id/media', async (req, res) => {
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Could not load proof media' });
+  }
+});
+
+router.get('/:id/timeline', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM issues WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
+    const issue = rows[0];
+    if (!canReadIssue(req.user, issue)) return res.status(403).json({ error: 'Not allowed' });
+
+    const synthetic = [
+      { action: 'created', actor_name: issue.opened_by_name, created_at: issue.opened_at, details: { status: 'open' } },
+      issue.verified_at ? { action: 'verified', actor_name: issue.verified_by_name, created_at: issue.verified_at, details: { note: issue.auditor_note } } : null,
+      issue.assigned_at ? { action: 'assigned', actor_name: issue.assigned_by_name, created_at: issue.assigned_at, details: { assignedTo: issue.assigned_to_name, note: issue.assignment_note } } : null,
+      issue.resolved_at ? { action: 'submitted_for_final_ok', actor_name: issue.resolved_by_name, created_at: issue.resolved_at, details: { proof: issue.close_proof } } : null,
+      issue.final_verified_at ? { action: 'admin_final_ok', actor_name: issue.final_verified_by_name, created_at: issue.final_verified_at, details: { score: issue.final_score, note: issue.final_verify_note } } : null
+    ].filter(Boolean);
+    const audit = await pool.query(
+      `SELECT action, actor_name, created_at, details
+       FROM audit_logs
+       WHERE target_type='issue' AND target_id=$1
+       ORDER BY created_at ASC`,
+      [req.params.id]
+    );
+    res.json([...synthetic, ...audit.rows].sort((a, b) => new Date(a.created_at) - new Date(b.created_at)));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not load timeline' });
+  }
+});
+
+router.post('/:id/assign', async (req, res) => {
+  const u = req.user;
+  if (u.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  const { userId, note } = req.body || {};
+  if (!userId) return res.status(400).json({ error: 'Assigned user is required' });
+
+  try {
+    const issueResult = await pool.query('SELECT id, branch_code, status, title FROM issues WHERE id=$1', [req.params.id]);
+    if (!issueResult.rows.length) return res.status(404).json({ error: 'Issue not found' });
+    const issue = issueResult.rows[0];
+    if (issue.status === 'closed') return res.status(400).json({ error: 'Closed issue cannot be assigned' });
+
+    const userResult = await pool.query(
+      `SELECT u.id, u.name, u.phone, u.role
+       FROM users u
+       JOIN user_routes r ON r.user_id=u.id
+       WHERE u.id=$1 AND u.role='coordinator' AND u.is_active=true AND r.branch_code=$2`,
+      [String(userId).toUpperCase(), issue.branch_code]
+    );
+    if (!userResult.rows.length) return res.status(400).json({ error: 'Selected user is not responsible for this branch' });
+    const assignee = userResult.rows[0];
+
+    await pool.query(
+      `UPDATE issues
+       SET assigned_to=$1, assigned_to_name=$2, assigned_by=$3, assigned_by_name=$4, assigned_at=now(), assignment_note=$5
+       WHERE id=$6`,
+      [assignee.id, assignee.name, u.id, u.name, note || null, req.params.id]
+    );
+    await logAudit(u, 'issue_assigned', 'issue', req.params.id, {
+      branch: issue.branch_code,
+      assignedTo: assignee.id,
+      note: note || null
+    });
+    await notifyUsers(
+      [assignee],
+      req.params.id,
+      'issue_assigned',
+      `MAXBACHAT: Issue ${req.params.id} at ${issue.branch_code} assigned to you. ${issue.title}`
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not assign issue' });
   }
 });
 
@@ -243,9 +319,12 @@ router.post('/:id/close', async (req, res) => {
   const { note, media } = req.body || {};
 
   try {
-    const { rows } = await pool.query('SELECT branch_code, status, title FROM issues WHERE id=$1', [req.params.id]);
+    const { rows } = await pool.query('SELECT branch_code, status, title, assigned_to FROM issues WHERE id=$1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Issue not found' });
     if (!u.routes.includes(rows[0].branch_code)) return res.status(403).json({ error: 'This issue is not in your queue' });
+    if (rows[0].assigned_to && rows[0].assigned_to !== u.id && !u.isHead) {
+      return res.status(403).json({ error: 'This issue is assigned to another maintenance user' });
+    }
     if (rows[0].status !== 'verified') return res.status(400).json({ error: 'Issue must be verified before it can be resolved' });
     await pool.query(
       `UPDATE issues SET status='pending_review', resolved_by=$1, resolved_by_name=$2, resolved_at=now(), close_proof=$3
@@ -326,7 +405,7 @@ router.post('/:id/reject-resolution', async (req, res) => {
     ].filter(Boolean).join('\n');
     await pool.query(
       `UPDATE issues
-       SET status='verified', auditor_note=$1, final_verify_note=$2
+       SET status='verified', auditor_note=$1, final_verify_note=$2, rejection_count=coalesce(rejection_count,0)+1
        WHERE id=$3`,
       [rejectionNote, note.trim(), req.params.id]
     );

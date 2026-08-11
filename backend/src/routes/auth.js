@@ -28,6 +28,13 @@ router.post('/login', async (req, res) => {
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Incorrect ID or password' });
 
+    await pool.query(
+      `UPDATE users
+       SET last_login_at=now(), last_seen_at=now(), login_count=coalesce(login_count,0)+1
+       WHERE id=$1`,
+      [user.id]
+    );
+
     let routes = user.branch_code ? [user.branch_code] : [];
     if (user.role === 'coordinator') {
       const r = await pool.query('SELECT branch_code FROM user_routes WHERE user_id = $1', [user.id]);

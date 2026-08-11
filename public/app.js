@@ -126,9 +126,11 @@ function normalizeIssue(i){
     closeProof:i.close_proof,
     closeProofMedia: closeMedia ? {type:closeMedia.media_type, dataUrl:closeMedia.url} : null,
     closedByName:i.closed_by_name, closedAt:i.closed_at,
+    assignedTo:i.assigned_to, assignedToName:i.assigned_to_name, assignedByName:i.assigned_by_name,
+    assignedAt:i.assigned_at, assignmentNote:i.assignment_note,
     resolvedByName:i.resolved_by_name, resolvedAt:i.resolved_at,
     finalVerifiedByName:i.final_verified_by_name, finalVerifiedAt:i.final_verified_at,
-    finalVerifyNote:i.final_verify_note, finalScore:i.final_score
+    finalVerifyNote:i.final_verify_note, finalScore:i.final_score, rejectionCount:i.rejection_count || 0
   };
 }
 function genLocalId(){ return 'tmp-' + Date.now(); }
@@ -287,6 +289,9 @@ async function enterApp(){
     renderSidebar();
     if(sidebarView==='visits') renderMain();
   });
+  loadUsers().then(() => {
+    if(currentUser && currentUser.role === 'admin') renderMain();
+  });
 }
 function doLogout(){
   currentUser = null; AUTH_TOKEN = null;
@@ -348,7 +353,7 @@ function renderSidebar(){
       {key:'aud-all', label:'All branch issues', count: mine.length},
     ];
   } else if(u.role==='coordinator'){
-    const mine = ISSUES.filter(i=>u.routes.includes(i.branch));
+    const mine = ISSUES.filter(i=>u.routes.includes(i.branch) && (u.isHead || !i.assignedTo || i.assignedTo === u.id));
     const forceCount = NOTIFICATIONS.filter(n=>n.event_type==='force_issue_created').length;
     items = [
       {key:'force-alerts', label:'Force alerts', count: forceCount},
@@ -437,6 +442,8 @@ function performanceRows(){
     const pendingPenalty = Math.max(0, Math.min(1, oldestPendingDays / 7));
     const efficiency = list.length ? Math.round(((closureRate * 0.60) + (speedScore * 0.25) + ((1 - pendingPenalty) * 0.15)) * 100) : null;
     const verificationRate = list.length ? Math.round((verified.length / list.length) * 100) : null;
+    const avgMark = avg(closed.map(i=>Number(i.finalScore)).filter(Number.isFinite));
+    const rejected = list.reduce((sum, i)=>sum + (Number(i.rejectionCount) || 0), 0);
     return {
       ...t,
       total:list.length,
@@ -445,7 +452,9 @@ function performanceRows(){
       avgDays,
       oldestPendingDays,
       efficiency,
-      verificationRate
+      verificationRate,
+      avgMark,
+      rejected
     };
   });
 }
@@ -463,7 +472,7 @@ function renderPerformanceDashboard(){
       <div class="panel-title">Maintenance team performance</div>
       <div class="perf-table">
         <div class="perf-row perf-head">
-          <span>Team</span><span>Highlighted</span><span>Closed</span><span>Avg resolve</span><span>Efficiency</span><span>Verify rate</span>
+          <span>Team</span><span>Highlighted</span><span>Closed</span><span>Avg resolve</span><span>Marks</span><span>Rejected</span>
         </div>
         ${rows.map(r=>`
           <div class="perf-row">
@@ -471,8 +480,8 @@ function renderPerformanceDashboard(){
             <span data-label="Highlighted">${r.total}</span>
             <span data-label="Closed">${r.closed}/${r.total || 0}<span class="perf-sub">${r.pending} pending</span></span>
             <span data-label="Avg resolve">${r.avgDays === null ? 'N/A' : r.avgDays.toFixed(1)+' days'}<span class="perf-sub">${Math.round(r.oldestPendingDays)}d oldest pending</span></span>
-            <span data-label="Efficiency"><span class="score-pill ${scoreClass(r.efficiency)}">${scoreText(r.efficiency)}</span></span>
-            <span data-label="Verify rate"><span class="score-pill ${scoreClass(r.verificationRate)}">${scoreText(r.verificationRate)}</span></span>
+            <span data-label="Marks"><span class="score-pill ${scoreClass(r.avgMark === null ? null : Math.round((r.avgMark / 5) * 100))}">${r.avgMark === null ? 'N/A' : r.avgMark.toFixed(1)+'/5'}</span></span>
+            <span data-label="Rejected"><span class="score-pill ${r.rejected ? 'low' : ''}">${r.rejected}</span></span>
           </div>
         `).join('')}
       </div>
@@ -503,7 +512,7 @@ function renderAdmin(){
   m.innerHTML = `
     <div class="page-head">
       <div><h1>Head office overview</h1><p>Maintenance performance across all branches and locations</p></div>
-      <div class="actions-row"><button class="btn btn-fill" onclick="openReportExportModal()">Export report</button></div>
+      <div class="actions-row"><button class="btn" onclick="sendMaintenanceReminders()">Send reminders</button><button class="btn btn-fill" onclick="openReportExportModal()">Export report</button></div>
     </div>
     <div class="stat-grid">
       <div class="stat-card"><div class="lbl">Total issues logged</div><div class="val">${total}</div></div>
@@ -782,6 +791,7 @@ async function renderAdminUsers(){
           <span class="bname">${escapeHtml(u.id)} · ${escapeHtml(u.name)}</span>
           <span class="bpct">${escapeHtml(u.role)}${u.branch_code ? ' · '+escapeHtml(u.branch_code) : ''} · ${u.phone ? escapeHtml(u.phone)+' · ' : ''}${u.is_active ? 'Active' : 'Disabled'}</span>
         </div>
+        <div class="desc">Last login: ${fmtDateTime(u.last_login_at)} · Logins: ${u.login_count || 0} · Pending actions: ${pendingActionsForUser(u)}</div>
         <div class="actions-row">
           <button class="btn-ghost-sm" onclick="openPhoneModal('${escapeHtml(u.id)}','${escapeHtml(u.phone || '')}')">Phone</button>
           <button class="btn-ghost-sm" onclick="openResetPasswordModal('${escapeHtml(u.id)}')">Reset password</button>
@@ -792,6 +802,16 @@ async function renderAdminUsers(){
   }catch(e){
     document.getElementById('users-table').innerHTML = `<div class="empty-state">${escapeHtml(e.message)}</div>`;
   }
+}
+
+function pendingActionsForUser(u){
+  if(u.role === 'coordinator'){
+    return ISSUES.filter(i => i.status === 'verified' && (i.assignedTo === u.id || (!i.assignedTo && (i.branch === u.branch_code || u.is_head)))).length;
+  }
+  if(u.role === 'admin') return ISSUES.filter(i => i.status === 'pending_review').length;
+  if(u.role === 'auditor') return ISSUES.filter(i => i.branch === u.branch_code && i.status === 'open').length;
+  if(u.role === 'captain' || u.role === 'reporter') return ISSUES.filter(i => i.branch === u.branch_code && i.status === 'pending_review').length;
+  return 0;
 }
 
 async function renderAdminAudit(){
@@ -900,7 +920,7 @@ function renderCoordinator(){
     list = ISSUES.slice();
     branchLabel = 'All branches';
   } else {
-    const mine = ISSUES.filter(i=>u.routes.includes(i.branch));
+    const mine = ISSUES.filter(i=>u.routes.includes(i.branch) && (u.isHead || !i.assignedTo || i.assignedTo === u.id));
     if(sidebarView==='sc-closed') list = mine.filter(i=>i.status==='closed');
     else if(sidebarView==='sc-review') list = mine.filter(i=>i.status==='pending_review');
     else list = mine.filter(i=>i.status==='verified');
@@ -1040,14 +1060,17 @@ function ticketCard(i, mode){
   let meta = `<div class="meta-line">
     <span>Opened by <b>${i.openedByName}</b> \u00b7 ${fmtDate(i.openedAt)}${i.branch ? ' \u00b7 '+i.branch : ''}</span>
     ${i.verifiedByName ? `<span>Verified by <b>${i.verifiedByName}</b> \u00b7 ${fmtDate(i.verifiedAt)}</span>` : ''}
+    ${i.assignedToName ? `<span>Assigned to <b>${i.assignedToName}</b> \u00b7 ${fmtDate(i.assignedAt)}</span>` : ''}
     ${i.resolvedByName ? `<span>Submitted resolved by <b>${i.resolvedByName}</b> \u00b7 ${fmtDate(i.resolvedAt)}</span>` : ''}
     ${i.closedByName ? `<span>Final closed by <b>${i.closedByName}</b> \u00b7 ${fmtDate(i.closedAt)}</span>` : ''}
     ${i.finalScore ? `<span>Admin marks <b>${i.finalScore}/5</b></span>` : ''}
+    ${i.rejectionCount ? `<span>Rejected / sent back <b>${i.rejectionCount}</b> time${i.rejectionCount>1?'s':''}</span>` : ''}
   </div>`;
   let proofs = '';
   if(i.openProof) proofs += `<div class="proof-note"><b>Opening proof:</b> ${escapeHtml(i.openProof)}</div>`;
   proofs += mediaBlock(i.openProofMedia, 'Opening photo / video');
   if(i.auditorNote) proofs += `<div class="proof-note"><b>Auditor note:</b> ${escapeHtml(i.auditorNote)}</div>`;
+  if(i.assignmentNote) proofs += `<div class="proof-note"><b>Assignment note:</b> ${escapeHtml(i.assignmentNote)}</div>`;
   if(i.closeProof) proofs += `<div class="proof-note"><b>Closure proof:</b> ${escapeHtml(i.closeProof)}</div>`;
   proofs += mediaBlock(i.closeProofMedia, 'Closure photo / video');
   if(i.finalVerifyNote) proofs += `<div class="proof-note"><b>Final verification note:</b> ${escapeHtml(i.finalVerifyNote)}</div>`;
@@ -1055,6 +1078,12 @@ function ticketCard(i, mode){
   let cta = '';
   if(mode==='verify' && i.status==='open') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openVerifyModal('${i.id}')">Verify issue</button></div>`;
   if(mode==='close' && i.status==='verified') cta = `<div class="ticket-cta"><button class="btn-ghost-sm" style="width:100%" onclick="openCloseModal('${i.id}')">Submit for final OK</button></div>`;
+  if(currentUser && currentUser.role === 'admin' && i.status !== 'closed'){
+    const assignButton = `<button class="btn-ghost-sm" style="width:100%" onclick="openAssignIssueModal('${i.id}')">${i.assignedTo ? 'Reassign' : 'Assign'}</button>`;
+    cta = cta ? cta.replace('</div>', `${assignButton}</div>`) : `<div class="ticket-cta">${assignButton}</div>`;
+  }
+  const timelineButton = `<button class="btn-ghost-sm" style="width:100%" onclick="openIssueTimeline('${i.id}')">Timeline</button>`;
+  cta = cta ? cta.replace('</div>', `${timelineButton}</div>`) : `<div class="ticket-cta">${timelineButton}</div>`;
   const canFinal = i.status === 'pending_review' && currentUser && (
     currentUser.role === 'admin'
   );
@@ -1086,6 +1115,91 @@ function ticketCard(i, mode){
   </div>`;
 }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+function coordinatorsForIssue(i){
+  return USERS.filter(u => u.role === 'coordinator' && u.is_active !== false && (u.branch_code === i.branch || u.is_head));
+}
+
+function openAssignIssueModal(id){
+  const i = ISSUES.find(x=>x.id===id);
+  if(!i) return;
+  const options = coordinatorsForIssue(i).map(u =>
+    `<option value="${escapeHtml(u.id)}" ${i.assignedTo===u.id?'selected':''}>${escapeHtml(u.name)} (${escapeHtml(u.id)})</option>`
+  ).join('');
+  showModal(`
+    <div class="modal-head"><h3>Assign issue</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <p class="sub">${escapeHtml(i.title)} · ${escapeHtml(branchName(i.branch))}</p>
+    <div class="field"><label>Assigned to</label><select id="f-assign-user">${options || '<option value="">No maintenance user found</option>'}</select></div>
+    <div class="field"><label>Assignment note</label><textarea id="f-assign-note" placeholder="e.g. Please visit branch and update proof">${escapeHtml(i.assignmentNote || '')}</textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-fill" onclick="submitAssignIssue('${id}')">Save assignment</button>
+    </div>
+  `);
+}
+async function submitAssignIssue(id){
+  const userId = document.getElementById('f-assign-user').value;
+  const note = document.getElementById('f-assign-note').value.trim();
+  if(!userId){ alert('Please select a maintenance user.'); return; }
+  const saveBtn = document.querySelector('.modal-actions .btn-fill');
+  if(saveBtn){ saveBtn.textContent='Saving...'; saveBtn.disabled=true; }
+  try{
+    await apiFetch(`/issues/${id}/assign`, { method:'POST', body: JSON.stringify({ userId, note }) });
+    await loadIssues();
+    closeModal();
+    renderSidebar(); renderMain();
+  }catch(e){
+    alert(e.message || 'Could not assign issue.');
+    if(saveBtn){ saveBtn.textContent='Save assignment'; saveBtn.disabled=false; }
+  }
+}
+
+async function openIssueTimeline(id){
+  showModal(`
+    <div class="modal-head"><h3>Issue timeline</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+    <div class="empty-state">Loading timeline...</div>
+  `, {wide:true});
+  try{
+    const rows = await apiFetch(`/issues/${id}/timeline`);
+    showModal(`
+      <div class="modal-head"><h3>Issue timeline</h3><button class="x-btn" onclick="closeModal()">&times;</button></div>
+      <p class="sub">${escapeHtml(id)}</p>
+      <div class="bars">
+        ${rows.map(r=>`
+          <div class="bar-row" style="border-bottom:1px solid var(--line);padding-bottom:10px;">
+            <div class="bar-top">
+              <span class="bname">${escapeHtml(timelineLabel(r.action))}</span>
+              <span class="bpct">${fmtDateTime(r.created_at)}</span>
+            </div>
+            <div class="desc">${escapeHtml(r.actor_name || 'System')}${timelineDetail(r.details)}</div>
+          </div>
+        `).join('') || '<div class="empty-state">No timeline events yet.</div>'}
+      </div>
+    `, {wide:true});
+  }catch(e){
+    showModal(`<div class="modal-head"><h3>Issue timeline</h3><button class="x-btn" onclick="closeModal()">&times;</button></div><div class="empty-state">${escapeHtml(e.message || 'Could not load timeline.')}</div>`, {wide:true});
+  }
+}
+function timelineLabel(action){
+  return String(action || '').replace(/_/g, ' ').replace(/\b\w/g, c=>c.toUpperCase());
+}
+function timelineDetail(details){
+  if(!details) return '';
+  const data = typeof details === 'string' ? details : JSON.stringify(details);
+  return data && data !== '{}' ? ` · ${escapeHtml(data)}` : '';
+}
+
+async function sendMaintenanceReminders(){
+  if(!confirm('Send reminders for all pending maintenance/final OK issues?')) return;
+  try{
+    const result = await apiFetch('/notifications/reminders', { method:'POST', body: JSON.stringify({}) });
+    await loadNotifications();
+    alert(`Reminders queued for ${result.issues || 0} issues and ${result.recipients || 0} recipients.`);
+    renderSidebar();
+  }catch(e){
+    alert(e.message || 'Could not send reminders.');
+  }
+}
 
 async function viewIssueProofMedia(id, btn){
   if(btn){ btn.textContent = 'Loading proof...'; btn.disabled = true; }

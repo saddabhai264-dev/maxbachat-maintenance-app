@@ -20,12 +20,18 @@ CREATE TABLE IF NOT EXISTS users (
   is_head       BOOLEAN NOT NULL DEFAULT FALSE, -- true for the overall Head of Maintenance Department (MT-BR1)
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
+  last_login_at TIMESTAMPTZ,
+  last_seen_at  TIMESTAMPTZ,
+  login_count   INTEGER NOT NULL DEFAULT 0,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS login_count INTEGER NOT NULL DEFAULT 0;
 
 -- Which branches/locations a maintenance-team login is responsible for resolving.
 -- MT-BR1 (the head) routes BR1 + JDC + MANDI. Other coordinators route only their own branch.
@@ -55,6 +61,12 @@ CREATE TABLE IF NOT EXISTS issues (
   closed_by_name   TEXT,
   closed_at        TIMESTAMPTZ,
   close_proof      TEXT,
+  assigned_to      TEXT REFERENCES users(id),
+  assigned_to_name TEXT,
+  assigned_by      TEXT REFERENCES users(id),
+  assigned_by_name TEXT,
+  assigned_at      TIMESTAMPTZ,
+  assignment_note  TEXT,
   deadline_at      TIMESTAMPTZ,
   deadline_set_by  TEXT REFERENCES users(id),
   deadline_set_by_name TEXT,
@@ -67,6 +79,7 @@ CREATE TABLE IF NOT EXISTS issues (
   final_verified_at TIMESTAMPTZ,
   final_verify_note TEXT,
   final_score     INTEGER,
+  rejection_count INTEGER NOT NULL DEFAULT 0,
   estimated_cost   NUMERIC,
   approval_status  TEXT NOT NULL DEFAULT 'not_required' CHECK (approval_status IN ('not_required','pending','approved','rejected')),
   approval_required BOOLEAN NOT NULL DEFAULT FALSE,
@@ -86,6 +99,12 @@ ALTER TABLE issues ADD COLUMN IF NOT EXISTS approved_by TEXT REFERENCES users(id
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS approved_by_name TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS approval_note TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS assigned_to TEXT REFERENCES users(id);
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS assigned_to_name TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS assigned_by TEXT REFERENCES users(id);
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS assigned_by_name TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS assignment_note TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_set_by TEXT REFERENCES users(id);
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS deadline_set_by_name TEXT;
@@ -98,6 +117,7 @@ ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_by_name TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verified_at TIMESTAMPTZ;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_verify_note TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS final_score INTEGER;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS rejection_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE issues DROP CONSTRAINT IF EXISTS issues_final_score_check;
 ALTER TABLE issues ADD CONSTRAINT issues_final_score_check CHECK (final_score IS NULL OR (final_score >= 1 AND final_score <= 5));
 ALTER TABLE issues DROP CONSTRAINT IF EXISTS issues_status_check;
